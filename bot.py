@@ -74,43 +74,52 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
         mail.login(email_usuario, senha)
         mail.select("INBOX")
 
-        _, messages = mail.search(None, "ALL")
+        # Otimização: Busca apenas e-mails recebidos HOJE para ser ultra rápido
+        data_hoje = datetime.now(timezone.utc).strftime("%d-%b-%Y")
+        _, messages = mail.search(None, f'(SINCE "{data_hoje}")')
         id_list = messages[0].split()
+
+        # Se não houver e-mails hoje, faz busca rápida geral dos últimos
+        if not id_list:
+            _, messages = mail.search(None, "ALL")
+            id_list = messages[0].split()
 
         if not id_list:
             mail.logout()
             return "❌ Nenhum e-mail foi encontrado nesta caixa de entrada."
 
+        # Pega a mensagem mais recente
         latest_id = id_list[-1]
         _, data = mail.fetch(latest_id, "(RFC822)")
         msg = email.message_from_bytes(data[0][1])
 
-        # Valida se o e-mail recente foi enviado para a variação específica do cliente
-        header_para = msg.get("To", "").lower()
-        if email_destinatario not in header_para:
-            mail.logout()
-            return (
-                f"⚠️ **E-mail divergente!**\n\n"
-                f"O último e-mail recebido nesta caixa não foi destinado a `{email_destinatario}`.\n"
-                f"Solicite a atualização do código na TV para esse e-mail exato."
-            )
-
+        # 1. Valida se a mensagem chegou nos últimos 20 minutos
         data_email_header = msg.get("Date")
         if not data_email_header:
             mail.logout()
-            return "❌ Não foi possível verificar o horário do e-mail."
+            return "❌ Não foi possível verificar o horário do último e-mail."
 
         data_email = parsedate_to_datetime(data_email_header)
         agora = datetime.now(timezone.utc)
         diferenca_tempo = agora - data_email
 
-        if diferenca_tempo > timedelta(minutes=15):
+        if diferenca_tempo > timedelta(minutes=20):
             minutos_passados = int(diferenca_tempo.total_seconds() // 60)
             mail.logout()
             return (
                 f"⚠️ **Código Expirado!**\n\n"
-                f"O último e-mail para esta conta foi recebido há **{minutos_passados} minutos**.\n"
-                f"Solicite um novo código no aplicativo da TV."
+                f"O último e-mail recebido nesta caixa chegou há **{minutos_passados} minutos** (limite é 20 min).\n"
+                f"Solicite um novo código no aplicativo/site da TV."
+            )
+
+        # 2. Valida se o e-mail recente foi enviado para a variação específica do cliente
+        header_para = msg.get("To", "").lower()
+        if email_destinatario not in header_para:
+            mail.logout()
+            return (
+                f"⚠️ **E-mail divergente!**\n\n"
+                f"O último e-mail recebido não foi destinado a `{email_destinatario}`.\n"
+                f"Certifique-se de ter solicitado o código na TV para essa variação exata."
             )
 
         corpo = ""
@@ -133,7 +142,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
             return (
                 f"✅ **Código Encontrado!**\n\n"
                 f"🔑 Seu código é: `{match_codigo.group(0)}`\n\n"
-                f"⏱️ *E-mail recebido há menos de {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
+                f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
             )
         elif match_link:
             return (
@@ -141,11 +150,11 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
                 f"🔗 Clique no link abaixo para liberar:\n{match_link.group(0)}"
             )
         else:
-            return "⚠️ Um e-mail recente foi encontrado (no prazo de 15 min), mas o código não pôde ser lido automaticamente."
+            return "⚠️ Um e-mail recente foi encontrado (no prazo de 20 min), mas o código não pôde ser lido automaticamente."
 
     except Exception as e:
         logging.error(f"Erro IMAP: {e}")
-        return "❌ Erro ao acessar a caixa de e-mail. Verifique as credenciais no sistema."
+        return "❌ Erro ao acessar a caixa de e-mail. Verifique a Senha de Aplicativo no sistema."
 
 # --- Handlers do Bot do Telegram ---
 
@@ -163,7 +172,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"👋 **Central de Liberação de Códigos**\n\n"
         f"Seu ID do Telegram: `{user_id}`\n\n"
-        f"Envie o **e-mail do seu login** para buscar o código de verificação recebido nos últimos 15 minutos.",
+        f"Envie o **e-mail do seu login** para buscar o código de verificação recebido nos últimos 20 minutos.",
         parse_mode="Markdown"
     )
 
@@ -282,4 +291,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-                    
