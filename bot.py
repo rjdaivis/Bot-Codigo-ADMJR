@@ -15,7 +15,7 @@ logging.basicConfig(
 )
 
 TOKEN_TELEGRAM = "8621009761:AAF3vIBd5--2FDxSJsDCJSpGYcfSf64tpjc"
-ADMIN_ID = 7496198484  # Seu ID numérico
+ADMIN_ID = 7496198484  # Seu ID numérico do Telegram
 
 app_flask = Flask('')
 
@@ -64,14 +64,12 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
         mail = imaplib.IMAP4_SSL(host, porta)
         mail.login(email_usuario, senha)
         
-        # Seleciona [Gmail]/All Mail para pegar e-mails de qualquer aba/pasta
-        status, _ = mail.select('"[Gmail]/Todos os emails"')
-        if status != 'OK':
+        # Tenta selecionar a caixa de entrada padrão
+        res, _ = mail.select("INBOX")
+        if res != 'OK':
             mail.select('"[Gmail]/All Mail"')
-        if status != 'OK':
-            mail.select("INBOX")
 
-        # Busca por todos os e-mails
+        # Busca pelas últimas mensagens recebidas
         _, messages = mail.search(None, "ALL")
         id_list = messages[0].split()
 
@@ -79,7 +77,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
             mail.logout()
             return "❌ Nenhum e-mail foi encontrado nesta caixa de entrada."
 
-        # Analisa os últimos 5 e-mails recebidos para encontrar o da Netflix
+        # Analisa os últimos 5 e-mails recebidos
         ultimos_ids = id_list[-5:]
         ultimos_ids.reverse()
 
@@ -87,7 +85,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
             _, data = mail.fetch(msg_id, "(RFC822)")
             msg = email.message_from_bytes(data[0][1])
 
-            # Verifica data do e-mail
             data_email_header = msg.get("Date")
             if not data_email_header:
                 continue
@@ -96,11 +93,10 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
             agora = datetime.now(timezone.utc)
             diferenca_tempo = agora - data_email
 
-            # Pula se o e-mail for mais antigo que 15 minutos
+            # Descarta se for mais antigo que 15 minutos
             if diferenca_tempo > timedelta(minutes=15):
                 continue
 
-            # Extração de corpo/texto
             corpo = ""
             if msg.is_multipart():
                 for part in msg.walk():
@@ -108,11 +104,15 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
                     content_disposition = str(part.get("Content-Disposition"))
                     if "attachment" not in content_disposition:
                         if content_type in ["text/plain", "text/html"]:
-                            corpo += part.get_payload(decode=True).decode(errors="ignore") + "\n"
+                            payload = part.get_payload(decode=True)
+                            if payload:
+                                corpo += payload.decode(errors="ignore") + "\n"
             else:
-                corpo = msg.get_payload(decode=True).decode(errors="ignore")
+                payload = msg.get_payload(decode=True)
+                if payload:
+                    corpo = payload.decode(errors="ignore")
 
-            # Busca código de 4 a 8 dígitos
+            # Regex para código de acesso ou link de login
             match_codigo = re.search(r'\b\d{4,8}\b', corpo)
             match_link = re.search(r'https?://[^\s<>"]+(?:update-primary-location|confirm|verify|household|login|account|auth|code)[^\s<>"]*', corpo, re.IGNORECASE)
 
@@ -131,7 +131,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
                 )
 
         mail.logout()
-        return "⚠️ Nenhum código da Netflix recebido nos últimos 15 minutos foi encontrado."
+        return "⚠️ Nenhum código recebido nos últimos 15 minutos foi encontrado."
 
     except Exception as e:
         logging.error(f"Erro IMAP: {e}")
@@ -266,3 +266,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
