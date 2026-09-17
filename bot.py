@@ -58,7 +58,7 @@ def normalizar_email_gmail(email_str: str) -> str:
         usuario = usuario.replace(".", "")
     return f"{usuario}@{dominio}"
 
-# --- Leitura IMAP com Filtro de Segurança ---
+# --- Leitura IMAP com Captura Prioritária de Links ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -120,12 +120,14 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
             texto_analise = (assunto + " " + corpo).lower()
 
+            # --- VERIFICAÇÃO DE SEGURANÇA ---
             if not pode_acessar_sensivel:
                 termos_proibidos = [
                     "redefinir sua senha", "redefinir a sua senha", "reset password", 
                     "alterar sua senha", "alterar o e-mail", "alterar email",
                     "troca de e-mail", "troca de email", "change email",
-                    "solicitação de redefinição", "atualize seu e-mail", "recuperação de conta"
+                    "solicitação de redefinição", "atualize seu e-mail", "recuperação de conta",
+                    "recuperacaosenha"
                 ]
 
                 for termo in termos_proibidos:
@@ -134,12 +136,27 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         return (
                             "🚫 **Solicitação Não Permitida!**\n\n"
                             "Este e-mail trata-se de uma alteração de senha ou mudança de e-mail da conta.\n"
-                            "Por motivos de segurança, esses códigos não são exibidos para o seu usuário."
+                            "Por motivos de segurança, esses links/códigos não são exibidos para o seu usuário."
                         )
 
-            match_codigo = re.search(r'\b\d{4,8}\b', corpo)
-            match_link = re.search(r'https?://[^\s<>"]+(?:update-primary-location|confirm|verify|household|login|account|auth|code|pass|reset|globo)[^\s<>"]*', corpo, re.IGNORECASE)
+            # 1. PRIORIDADE 1: Busca primeiro por Links de Validação e Redefinição (Globo, Netflix, Disney, etc.)
+            match_link = re.search(
+                r'https?://[^\s<>"]*(?:recuperacaosenha|login\.globo\.com|update-primary-location|confirm|verify|household|login|account|auth|code|pass|reset)[^\s<>"]*', 
+                corpo, 
+                re.IGNORECASE
+            )
 
+            if match_link:
+                mail.logout()
+                link_limpo = match_link.group(0).rstrip('.,;)')
+                return (
+                    f"✅ **Link de Redefinição/Validação Encontrado!**\n\n"
+                    f"🔗 Clique no link abaixo para acessar:\n{link_limpo}\n\n"
+                    f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
+                )
+
+            # 2. PRIORIDADE 2: Se não houver link, busca por código numérico de 4 a 8 dígitos
+            match_codigo = re.search(r'\b\d{4,8}\b', corpo)
             if match_codigo:
                 mail.logout()
                 return (
@@ -147,15 +164,9 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"🔑 Seu código é: `{match_codigo.group(0)}`\n\n"
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
-            elif match_link:
-                mail.logout()
-                return (
-                    f"✅ **Link de Validação/Acesso Encontrado!**\n\n"
-                    f"🔗 Clique no link abaixo para acessar:\n{match_link.group(0)}"
-                )
 
         mail.logout()
-        return "⚠️ Nenhum e-mail com código recebido nos últimos 15 minutos foi localizado nesta caixa."
+        return "⚠️ Nenhum e-mail com código ou link recebido nos últimos 15 minutos foi localizado nesta caixa."
 
     except socket.timeout:
         return "❌ O servidor de e-mail demorou muito para responder (Timeout). Tente novamente."
@@ -179,7 +190,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"👋 **Central de Liberação de Códigos**\n\n"
         f"Seu ID do Telegram: `{user_id}`\n\n"
-        f"Envie o **e-mail do seu login** para buscar o código recebido nos últimos 15 minutos.",
+        f"Envie o **e-mail do seu login** para buscar o código/link recebido nos últimos 15 minutos.",
         parse_mode="Markdown"
     )
 
@@ -210,7 +221,7 @@ async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
         clientes[user_id_cliente]["emails_permitidos"][email_cliente] = data_validade
         salvar_json("clientes.json", clientes)
 
-        msg_vip = " (Acesso Total + Troca de Senha)" if liberar_sensivel else ""
+        msg_vip = " (Acesso Total + Links de Redefinição)" if liberar_sensivel else ""
         await update.message.reply_text(
             f"✅ **Acesso Concedido!**\n\n"
             f"👤 **ID Cliente:** `{user_id_cliente}`\n"
@@ -220,8 +231,7 @@ async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except Exception:
         await update.message.reply_text(
-            "⚠️ **Uso correto:** `/autorizar ID_CLIENTE EMAIL DIAS [vip]`\n\n"
-            "• Para liberar **TODOS** os e-mails:\n`/autorizar ID_CLIENTE * DIAS vip`",
+            "⚠️ **Uso correto:** `/autorizar ID_CLIENTE EMAIL DIAS [vip]`",
             parse_mode="Markdown"
         )
 
@@ -244,8 +254,6 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
 
     if not eh_admin:
         emails_permitidos = dados_cliente.get("emails_permitidos", {})
-        
-        # Checa se tem permissão total (*) ou o e-mail específico
         tem_acesso = "*" in emails_permitidos or email_original in emails_permitidos
 
         if not dados_cliente or not tem_acesso:
@@ -255,7 +263,6 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
             )
             return
 
-        # Pega a data de expiração do e-mail específico ou do coringa (*)
         data_expiracao_str = emails_permitidos.get(email_original) or emails_permitidos.get("*")
         data_expiracao = datetime.strptime(data_expiracao_str, "%Y-%m-%d").date()
 
@@ -289,7 +296,7 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
     }
 
     msg_carregando = await update.message.reply_text(
-        f"⏳ *Buscando código recente para:* `{email_original}`...\nAguarde alguns segundos.",
+        f"⏳ *Buscando link/código recente para:* `{email_original}`...\nAguarde alguns segundos.",
         parse_mode="Markdown"
     )
 
