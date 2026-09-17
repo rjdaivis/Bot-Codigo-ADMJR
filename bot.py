@@ -5,6 +5,7 @@ import imaplib
 import email
 import os
 import socket
+import asyncio
 from threading import Thread
 from flask import Flask
 from email.utils import parsedate_to_datetime
@@ -57,7 +58,7 @@ def normalizar_email_gmail(email_str: str) -> str:
         usuario = usuario.replace(".", "")
     return f"{usuario}@{dominio}"
 
-# --- Leitura IMAP Segura com Timeout ---
+# --- Leitura IMAP Segura ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -66,15 +67,12 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
     senha = dados_conta.get("senha_imap")
 
     try:
-        # Define limite de 10 segundos para a conexão não travar
         socket.setdefaulttimeout(10)
         mail = imaplib.IMAP4_SSL(host, porta)
         mail.login(email_usuario, senha)
         
-        # Seleciona INBOX direta
         mail.select("INBOX")
 
-        # Busca todos os IDs
         status, messages = mail.search(None, "ALL")
         if status != "OK" or not messages[0]:
             mail.logout()
@@ -82,7 +80,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
 
         id_list = messages[0].split()
         
-        # Pega até os últimos 5 e-mails recebidos (ordem do mais novo para o mais antigo)
         ultimos_ids = id_list[-5:]
         ultimos_ids.reverse()
 
@@ -101,7 +98,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
             agora = datetime.now(timezone.utc)
             diferenca_tempo = agora - data_email
 
-            # Se for mais antigo que 15 minutos, ignora
             if diferenca_tempo > timedelta(minutes=15):
                 continue
 
@@ -120,7 +116,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
                 if payload:
                     corpo = payload.decode(errors="ignore")
 
-            # Busca por números isolados de 4 a 8 dígitos (Padrão de códigos de acesso)
             match_codigo = re.search(r'\b\d{4,8}\b', corpo)
             match_link = re.search(r'https?://[^\s<>"]+(?:update-primary-location|confirm|verify|household|login|account|auth|code)[^\s<>"]*', corpo, re.IGNORECASE)
 
@@ -257,7 +252,8 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
         parse_mode="Markdown"
     )
 
-    loop = context.application.loop
+    # CORREÇÃO DO ERRO DO LOG: Usa o loop assíncrono padrão do asyncio
+    loop = asyncio.get_running_loop()
     resultado = await loop.run_in_executor(None, extrair_codigo_imap_wrapper, dados_completos)
 
     await msg_carregando.edit_text(resultado, parse_mode="Markdown")
