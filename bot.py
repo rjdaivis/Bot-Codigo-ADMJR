@@ -58,7 +58,7 @@ def normalizar_email_gmail(email_str: str) -> str:
         usuario = usuario.replace(".", "")
     return f"{usuario}@{dominio}"
 
-# --- Leitura IMAP com Captura Prioritária de Links ---
+# --- Leitura IMAP de Alta Performance ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -139,23 +139,28 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                             "Por motivos de segurança, esses links/códigos não são exibidos para o seu usuário."
                         )
 
-            # 1. PRIORIDADE 1: Busca primeiro por Links de Validação e Redefinição (Globo, Netflix, Disney, etc.)
-            match_link = re.search(
-                r'https?://[^\s<>"]*(?:recuperacaosenha|login\.globo\.com|update-primary-location|confirm|verify|household|login|account|auth|code|pass|reset)[^\s<>"]*', 
-                corpo, 
-                re.IGNORECASE
-            )
+            # 1. Busca específica para Link de Redefinição da Globo
+            match_globo = re.search(r'https://login\.globo\.com/recuperacaoSenha/[^\s<>"\'\)]+', corpo, re.IGNORECASE)
+            
+            # 2. Busca genérica para links de acesso/verificação (Disney, Netflix, etc.)
+            match_link_geral = re.search(r'https?://[^\s<>"\'\)]+(?:update-primary-location|confirm|verify|household|login|account|auth|code|reset)[^\s<>"\'\)]*', corpo, re.IGNORECASE)
 
-            if match_link:
+            if match_globo:
                 mail.logout()
-                link_limpo = match_link.group(0).rstrip('.,;)')
                 return (
-                    f"✅ **Link de Redefinição/Validação Encontrado!**\n\n"
-                    f"🔗 Clique no link abaixo para acessar:\n{link_limpo}\n\n"
+                    f"✅ **Link de Redefinição Globo Encontrado!**\n\n"
+                    f"🔗 Clique no link abaixo para criar a nova senha:\n{match_globo.group(0)}\n\n"
+                    f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
+                )
+            elif match_link_geral:
+                mail.logout()
+                return (
+                    f"✅ **Link de Validação/Acesso Encontrado!**\n\n"
+                    f"🔗 Clique no link abaixo para acessar:\n{match_link_geral.group(0)}\n\n"
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
-            # 2. PRIORIDADE 2: Se não houver link, busca por código numérico de 4 a 8 dígitos
+            # 3. Código numérico (se não houver links no e-mail)
             match_codigo = re.search(r'\b\d{4,8}\b', corpo)
             if match_codigo:
                 mail.logout()
