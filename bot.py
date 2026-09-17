@@ -6,6 +6,8 @@ import email
 import os
 import socket
 import asyncio
+import html
+import quopri
 from threading import Thread
 from flask import Flask
 from email.utils import parsedate_to_datetime
@@ -58,7 +60,17 @@ def normalizar_email_gmail(email_str: str) -> str:
         usuario = usuario.replace(".", "")
     return f"{usuario}@{dominio}"
 
-# --- Leitura IMAP de Alta Performance ---
+def limpar_e_decodificar_texto(texto: str) -> str:
+    """Decodifica HTML Entities (ex: &#x3D; vira =) e limpa o texto do e-mail."""
+    if not texto:
+        return ""
+    # Decodifica entidades HTML como &#x3D; -> = e &amp; -> &
+    texto_decodificado = html.unescape(texto)
+    # Remove quebras de linha acidentais dentro de URLs causadas por Quoted-Printable
+    texto_limpo = re.sub(r'=\r?\n', '', texto_decodificado)
+    return texto_limpo
+
+# --- Leitura IMAP de Alta Performance com Decodificação de Link ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -118,7 +130,9 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 if payload:
                     corpo = payload.decode(errors="ignore")
 
-            texto_analise = (assunto + " " + corpo).lower()
+            # Limpa e decodifica caracteres HTML (Converte &#x3D; para =)
+            corpo_processado = limpar_e_decodificar_texto(corpo)
+            texto_analise = (assunto + " " + corpo_processado).lower()
 
             # --- VERIFICAÇÃO DE SEGURANÇA ---
             if not pode_acessar_sensivel:
@@ -139,29 +153,31 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                             "Por motivos de segurança, esses links/códigos não são exibidos para o seu usuário."
                         )
 
-            # 1. Busca específica para Link de Redefinição da Globo
-            match_globo = re.search(r'https://login\.globo\.com/recuperacaoSenha/[^\s<>"\'\)]+', corpo, re.IGNORECASE)
+            # 1. Busca específica para Link de Redefinição da Globo (Após decodificar o HTML)
+            match_globo = re.search(r'https://login\.globo\.com/recuperacaoSenha/[^\s<>"\'\);]+', corpo_processado, re.IGNORECASE)
             
             # 2. Busca genérica para links de acesso/verificação (Disney, Netflix, etc.)
-            match_link_geral = re.search(r'https?://[^\s<>"\'\)]+(?:update-primary-location|confirm|verify|household|login|account|auth|code|reset)[^\s<>"\'\)]*', corpo, re.IGNORECASE)
+            match_link_geral = re.search(r'https?://[^\s<>"\'\);]+(?:update-primary-location|confirm|verify|household|login|account|auth|code|reset)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
 
             if match_globo:
                 mail.logout()
+                link_limpo = match_globo.group(0).rstrip('.,;)')
                 return (
                     f"✅ **Link de Redefinição Globo Encontrado!**\n\n"
-                    f"🔗 Clique no link abaixo para criar a nova senha:\n{match_globo.group(0)}\n\n"
+                    f"🔗 Clique no link abaixo para criar a nova senha:\n{link_limpo}\n\n"
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
             elif match_link_geral:
                 mail.logout()
+                link_limpo = match_link_geral.group(0).rstrip('.,;)')
                 return (
                     f"✅ **Link de Validação/Acesso Encontrado!**\n\n"
-                    f"🔗 Clique no link abaixo para acessar:\n{match_link_geral.group(0)}\n\n"
+                    f"🔗 Clique no link abaixo para acessar:\n{link_limpo}\n\n"
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
             # 3. Código numérico (se não houver links no e-mail)
-            match_codigo = re.search(r'\b\d{4,8}\b', corpo)
+            match_codigo = re.search(r'\b\d{4,8}\b', corpo_processado)
             if match_codigo:
                 mail.logout()
                 return (
