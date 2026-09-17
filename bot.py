@@ -4,6 +4,7 @@ import re
 import imaplib
 import email
 import os
+import socket
 from threading import Thread
 from flask import Flask
 from email.utils import parsedate_to_datetime
@@ -15,7 +16,7 @@ logging.basicConfig(
 )
 
 TOKEN_TELEGRAM = "8621009761:AAF3vIBd5--2FDxSJsDCJSpGYcfSf64tpjc"
-ADMIN_ID = 7496198484  # Seu ID numérico do Telegram
+ADMIN_ID = 7496198484  # Substitua pelo seu ID numérico do Telegram
 
 app_flask = Flask('')
 
@@ -26,6 +27,8 @@ def home():
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app_flask.run(host='0.0.0.0', port=port)
+
+# --- Gerenciamento JSON ---
 
 def carregar_json(caminho: str) -> dict:
     try:
@@ -54,6 +57,8 @@ def normalizar_email_gmail(email_str: str) -> str:
         usuario = usuario.replace(".", "")
     return f"{usuario}@{dominio}"
 
+# --- Leitura IMAP Segura com Timeout ---
+
 def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
     email_usuario = dados_conta.get("email_usuario")
     host = dados_conta.get("host_imap", "imap.gmail.com")
@@ -61,28 +66,31 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
     senha = dados_conta.get("senha_imap")
 
     try:
+        # Define limite de 10 segundos para a conexão não travar
+        socket.setdefaulttimeout(10)
         mail = imaplib.IMAP4_SSL(host, porta)
         mail.login(email_usuario, senha)
         
-        # Tenta selecionar a caixa de entrada padrão
-        res, _ = mail.select("INBOX")
-        if res != 'OK':
-            mail.select('"[Gmail]/All Mail"')
+        # Seleciona INBOX direta
+        mail.select("INBOX")
 
-        # Busca pelas últimas mensagens recebidas
-        _, messages = mail.search(None, "ALL")
-        id_list = messages[0].split()
-
-        if not id_list:
+        # Busca todos os IDs
+        status, messages = mail.search(None, "ALL")
+        if status != "OK" or not messages[0]:
             mail.logout()
             return "❌ Nenhum e-mail foi encontrado nesta caixa de entrada."
 
-        # Analisa os últimos 5 e-mails recebidos
+        id_list = messages[0].split()
+        
+        # Pega até os últimos 5 e-mails recebidos (ordem do mais novo para o mais antigo)
         ultimos_ids = id_list[-5:]
         ultimos_ids.reverse()
 
         for msg_id in ultimos_ids:
             _, data = mail.fetch(msg_id, "(RFC822)")
+            if not data or not data[0]:
+                continue
+                
             msg = email.message_from_bytes(data[0][1])
 
             data_email_header = msg.get("Date")
@@ -93,7 +101,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
             agora = datetime.now(timezone.utc)
             diferenca_tempo = agora - data_email
 
-            # Descarta se for mais antigo que 15 minutos
+            # Se for mais antigo que 15 minutos, ignora
             if diferenca_tempo > timedelta(minutes=15):
                 continue
 
@@ -112,7 +120,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
                 if payload:
                     corpo = payload.decode(errors="ignore")
 
-            # Regex para código de acesso ou link de login
+            # Busca por números isolados de 4 a 8 dígitos (Padrão de códigos de acesso)
             match_codigo = re.search(r'\b\d{4,8}\b', corpo)
             match_link = re.search(r'https?://[^\s<>"]+(?:update-primary-location|confirm|verify|household|login|account|auth|code)[^\s<>"]*', corpo, re.IGNORECASE)
 
@@ -131,11 +139,13 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
                 )
 
         mail.logout()
-        return "⚠️ Nenhum código recebido nos últimos 15 minutos foi encontrado."
+        return "⚠️ Nenhum e-mail com código recebido nos últimos 15 minutos foi localizado nesta caixa."
 
+    except socket.timeout:
+        return "❌ O servidor do Gmail demorou muito para responder (Timeout). Tente novamente em alguns instantes."
     except Exception as e:
         logging.error(f"Erro IMAP: {e}")
-        return "❌ Erro ao acessar a caixa de e-mail. Verifique a Senha de Aplicativo no sistema."
+        return "❌ Erro de autenticação IMAP. Verifique se a Senha de Aplicativo de 16 dígitos está correta no `contas.json`."
 
 # --- Handlers Telegram ---
 
@@ -266,4 +276,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
