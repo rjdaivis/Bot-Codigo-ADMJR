@@ -3,6 +3,9 @@ import logging
 import re
 import imaplib
 import email
+import os
+from threading import Thread
+from flask import Flask
 from email.utils import parsedate_to_datetime
 from datetime import datetime, timezone, timedelta
 
@@ -15,12 +18,24 @@ from telegram.ext import (
     ContextTypes
 )
 
+# Configuração de Logs
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 
-TOKEN_TELEGRAM = "8621009761:AAF3vIBd5--2FDxSJsDCJSpGYcfSf64tpjc"
+TOKEN_TELEGRAM = "SEU_TOKEN_DO_TELEGRAM_AQUI"
+
+# Servidor Flask simples para manter o serviço ativo no plano Free (Web Service) do Render
+app_flask = Flask('')
+
+@app_flask.route('/')
+def home():
+    return "Bot de Códigos do Telegram está ativo e rodando!"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    app_flask.run(host='0.0.0.0', port=port)
 
 def carregar_contas():
     try:
@@ -103,7 +118,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
 
     except Exception as e:
         logging.error(f"Erro IMAP: {e}")
-        return "❌ Erro ao acessar a caixa de e-mail. Verifique a senha de aplicativo/configuração."
+        return "❌ Erro ao acessar a caixa de e-mail. Verifique a senha de aplicativo ou as configurações."
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -116,7 +131,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto_usuario = update.message.text.strip().lower()
 
-    # Validação simples para ver se o que foi digitado parece um e-mail
     if not re.match(r"^[\w\.-]+@[\w\.-]+\.\w+$", texto_usuario):
         await update.message.reply_text(
             "⚠️ Por favor, digite um **endereço de e-mail válido**.\nExemplo: `exemplo@gmail.com`",
@@ -148,10 +162,12 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
     await msg_carregando.edit_text(resultado, parse_mode="Markdown")
 
 def main():
+    # Inicia o servidor Flask em background para satisfazer a porta HTTP no Render Free
+    Thread(target=run_flask, daemon=True).start()
+
     app = ApplicationBuilder().token(TOKEN_TELEGRAM).build()
 
     app.add_handler(CommandHandler("start", start))
-    # Captura qualquer mensagem de texto que o cliente enviar
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receber_mensagem_email))
 
     print("🤖 Bot rodando...")
@@ -159,4 +175,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
