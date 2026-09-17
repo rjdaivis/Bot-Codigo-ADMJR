@@ -68,13 +68,14 @@ def limpar_e_decodificar_texto(texto: str) -> str:
     texto_limpo = re.sub(r'=\r?\n', '', texto_decodificado)
     return texto_limpo
 
-# --- Leitura IMAP Inteligente com Priorização Correta ---
+# --- Leitura IMAP com Suporte Inteligente a Encaminhados ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
     host = dados_conta.get("host_imap", "imap.gmail.com")
     porta = dados_conta.get("porta", 993)
     senha = dados_conta.get("senha_imap")
+    email_solicitado = dados_conta.get("email_destinatario", "").lower()
 
     try:
         socket.setdefaulttimeout(10)
@@ -90,7 +91,8 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
         id_list = messages[0].split()
         
-        ultimos_ids = id_list[-5:]
+        # Pega os últimos 10 e-mails recebidos para garimpar encaminhados
+        ultimos_ids = id_list[-10:]
         ultimos_ids.reverse()
 
         for msg_id in ultimos_ids:
@@ -131,6 +133,11 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             corpo_processado = limpar_e_decodificar_texto(corpo)
             texto_analise = (assunto + " " + corpo_processado).lower()
 
+            # Se for uma conta encaminhada, garante que a mensagem pertenca ao e-mail consultado
+            if email_solicitado and email_solicitado not in email_usuario:
+                if email_solicitado not in texto_analise and email_solicitado not in str(msg.get("To", "")).lower():
+                    continue
+
             # --- VERIFICAÇÃO DE SEGURANÇA PARA CLIENTES ---
             if not pode_acessar_sensivel:
                 termos_proibidos = [
@@ -150,7 +157,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                             "Por motivos de segurança, esses links/códigos não são exibidos para o seu usuário."
                         )
 
-            # 1. PRIORIDADE 1: Link de Redefinição de Senha Explicito (ex: Globo Play / Redefinição)
+            # 1. PRIORIDADE 1: Links de Redefinição Direta (Globo, etc.)
             match_globo = re.search(r'https://login\.globo\.com/recuperacaoSenha/[^\s<>"\'\);]+', corpo_processado, re.IGNORECASE)
             match_reset_especifico = re.search(r'https?://[^\s<>"\'\);]+(?:recuperacaosenha|reset-password|password-reset)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
 
@@ -181,7 +188,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
-            # 3. PRIORIDADE 3: Links genéricos de acesso/verificação secundários
+            # 3. PRIORIDADE 3: Links genéricos de acesso
             match_link_geral = re.search(r'https?://[^\s<>"\'\);]+(?:update-primary-location|confirm|verify|household|auth|code)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
             if match_link_geral:
                 mail.logout()
@@ -199,7 +206,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
         return "❌ O servidor de e-mail demorou muito para responder (Timeout). Tente novamente."
     except Exception as e:
         logging.error(f"Erro IMAP: {e}")
-        return "❌ Erro de autenticação IMAP. Verifique se a Senha de Aplicativo de 16 dígitos está correta no `contas.json`."
+        return "❌ Erro de autenticação IMAP no servidor de destino."
 
 # --- Handlers Telegram ---
 
@@ -316,9 +323,12 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
         )
         return
 
+    # Se a conta usar encaminhamento apontando para o Gmail, usa o e-mail mestre para autenticar
+    email_login = conta_encontrada.get("email_login", email_base)
+
     dados_completos = {
         **conta_encontrada,
-        "email_usuario": email_base,
+        "email_usuario": email_login,
         "email_destinatario": email_original
     }
 
