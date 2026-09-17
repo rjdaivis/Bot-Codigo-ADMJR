@@ -210,7 +210,7 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
         )
         return
 
-    # 1. Checa a autorização do cliente
+    # 1. Checa a autorização do cliente (Se não for o ADM)
     clientes = carregar_json("clientes.json")
     dados_cliente = clientes.get(user_id)
 
@@ -235,10 +235,15 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
             )
             return
 
-    # 2. Localiza as credenciais IMAP no contas.json
+    # 2. Localiza as credenciais IMAP no contas.json (Busca Flexível)
     email_base = normalizar_email_gmail(email_original)
     contas = carregar_json("contas.json")
-    conta_encontrada = contas.get(email_original) or contas.get(email_base)
+    
+    conta_encontrada = None
+    for chave_email, dados in contas.items():
+        if chave_email.strip().lower() == email_original or normalizar_email_gmail(chave_email) == email_base:
+            conta_encontrada = dados
+            break
 
     if not conta_encontrada:
         await update.message.reply_text(
@@ -277,4 +282,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+                    
