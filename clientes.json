@@ -1,1 +1,14 @@
-{}
+{
+  "987654321": {
+    "emails_permitidos": {
+      "cliente.comum@gmail.com": "2026-10-17"
+    },
+    "permitir_sensivel": false
+  },
+  "123456789": {
+    "emails_permitidos": {
+      "polyad.mj.r8.2and@gmail.com": "2026-12-31"
+    },
+    "permitir_sensivel": true
+  }
+}
