@@ -26,7 +26,7 @@ logging.basicConfig(
 
 TOKEN_TELEGRAM = "8621009761:AAF3vIBd5--2FDxSJsDCJSpGYcfSf64tpjc"
 
-# Servidor Flask simples para manter o serviço ativo no plano Free (Web Service) do Render
+# Servidor Flask simples para compatibilidade com o plano Free (Web Service) do Render
 app_flask = Flask('')
 
 @app_flask.route('/')
@@ -45,8 +45,20 @@ def carregar_contas():
         logging.error(f"Erro ao carregar contas.json: {e}")
         return {}
 
+def normalizar_email_gmail(email_str: str) -> str:
+    """Remove os pontos da parte local do e-mail para contas @gmail.com para localizar a conta base."""
+    partes = email_str.strip().lower().split('@')
+    if len(partes) != 2:
+        return email_str.strip().lower()
+    
+    usuario, dominio = partes
+    if dominio == "gmail.com":
+        usuario = usuario.replace(".", "")
+    return f"{usuario}@{dominio}"
+
 def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
     email_usuario = dados_conta.get("email_usuario")
+    email_destinatario = dados_conta.get("email_destinatario", "").lower()
     host = dados_conta.get("host_imap", "imap.gmail.com")
     porta = dados_conta.get("porta", 993)
     senha = dados_conta.get("senha_imap")
@@ -67,6 +79,16 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
         _, data = mail.fetch(latest_id, "(RFC822)")
         msg = email.message_from_bytes(data[0][1])
 
+        # Validação do destinatário exato (incluindo as variações de pontos)
+        header_para = msg.get("To", "").lower()
+        if email_destinatario not in header_para:
+            mail.logout()
+            return (
+                f"⚠️ **E-mail divergente!**\n\n"
+                f"O último e-mail recebido nesta caixa de entrada não foi enviado para `{email_destinatario}`.\n"
+                f"Certifique-se de ter solicitado o código na TV para esta variação exata."
+            )
+
         data_email_header = msg.get("Date")
         if not data_email_header:
             mail.logout()
@@ -81,7 +103,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
             mail.logout()
             return (
                 f"⚠️ **Código Expirado!**\n\n"
-                f"O último e-mail nesta conta foi recebido há **{minutos_passados} minutos**.\n"
+                f"O último e-mail para esta conta foi recebido há **{minutos_passados} minutos**.\n"
                 f"Solicite a atualização de residência novamente no app da TV/Dispositivo."
             )
 
@@ -129,30 +151,36 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    texto_usuario = update.message.text.strip().lower()
+    email_original = update.message.text.strip().lower()
 
-    if not re.match(r"^[\w\.-]+@[\w\.-]+\.\w+$", texto_usuario):
+    if not re.match(r"^[\w\.-]+@[\w\.-]+\.\w+$", email_original):
         await update.message.reply_text(
             "⚠️ Por favor, digite um **endereço de e-mail válido**.\nExemplo: `exemplo@gmail.com`",
             parse_mode="Markdown"
         )
         return
 
+    email_base = normalizar_email_gmail(email_original)
     contas = carregar_contas()
 
-    if texto_usuario not in contas:
+    # Procura pela variação exata com pontos ou pela conta principal sem pontos
+    conta_encontrada = contas.get(email_original) or contas.get(email_base)
+
+    if not conta_encontrada:
         await update.message.reply_text(
-            f"❌ O e-mail `{texto_usuario}` não está cadastrado em nosso sistema.\n"
-            f"Verifique se digitou corretamente.",
+            f"❌ O e-mail `{email_original}` não está associado a nenhuma conta cadastrada.",
             parse_mode="Markdown"
         )
         return
 
-    info_conta = contas[texto_usuario]
-    dados_completos = {**info_conta, "email_usuario": texto_usuario}
+    dados_completos = {
+        **conta_encontrada,
+        "email_usuario": email_base,
+        "email_destinatario": email_original
+    }
 
     msg_carregando = await update.message.reply_text(
-        f"⏳ *Buscando código recente para:* `{texto_usuario}`...\nAguarde alguns segundos.",
+        f"⏳ *Buscando código recente para:* `{email_original}`...\nAguarde alguns segundos.",
         parse_mode="Markdown"
     )
 
@@ -162,7 +190,6 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
     await msg_carregando.edit_text(resultado, parse_mode="Markdown")
 
 def main():
-    # Inicia o servidor Flask em background para satisfazer a porta HTTP no Render Free
     Thread(target=run_flask, daemon=True).start()
 
     app = ApplicationBuilder().token(TOKEN_TELEGRAM).build()
