@@ -16,7 +16,7 @@ logging.basicConfig(
 )
 
 TOKEN_TELEGRAM = "8621009761:AAF3vIBd5--2FDxSJsDCJSpGYcfSf64tpjc"
-ADMIN_ID = 123456789  # Substitua pelo seu ID numérico do Telegram
+ADMIN_ID = 7496198484  # Substitua pelo seu ID numérico do Telegram
 
 # Servidor Flask simples para manter o Web Service ativo no Render Free
 app_flask = Flask('')
