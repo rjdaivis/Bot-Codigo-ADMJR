@@ -58,7 +58,7 @@ def normalizar_email_gmail(email_str: str) -> str:
         usuario = usuario.replace(".", "")
     return f"{usuario}@{dominio}"
 
-# --- Leitura IMAP com Filtro de Segurança Inteligente ---
+# --- Leitura IMAP com Filtro de Segurança ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -120,8 +120,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
             texto_analise = (assunto + " " + corpo).lower()
 
-            # --- VERIFICAÇÃO DE SEGURANÇA ---
-            # Se NÃO for ADM e NÃO tiver permissão especial de sensível, bloqueia redefinições
             if not pode_acessar_sensivel:
                 termos_proibidos = [
                     "redefinir sua senha", "redefinir a sua senha", "reset password", 
@@ -139,10 +137,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                             "Por motivos de segurança, esses códigos não são exibidos para o seu usuário."
                         )
 
-            # Busca por números de 4 a 8 dígitos (Disney, Netflix, Globoplay, etc.)
             match_codigo = re.search(r'\b\d{4,8}\b', corpo)
-            
-            # Captura de links gerais (Globoplay, Netflix, Disney, etc.)
             match_link = re.search(r'https?://[^\s<>"]+(?:update-primary-location|confirm|verify|household|login|account|auth|code|pass|reset|globo)[^\s<>"]*', corpo, re.IGNORECASE)
 
             if match_codigo:
@@ -197,9 +192,8 @@ async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
         email_cliente = context.args[1].strip().lower()
         dias = int(context.args[2])
         
-        # Opcional: passa "vip" ou "sensivel" no final do comando para liberar trocas de senha
         liberar_sensivel = False
-        if len(context.args) > 3 and context.args[3].lower() in ["vip", "sensivel", "true"]:
+        if len(context.args) > 3 and context.args[3].lower() in ["vip", "sensivel", "true", "todos"]:
             liberar_sensivel = True
 
         clientes = carregar_json("clientes.json")
@@ -216,7 +210,7 @@ async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
         clientes[user_id_cliente]["emails_permitidos"][email_cliente] = data_validade
         salvar_json("clientes.json", clientes)
 
-        msg_vip = " (Com acesso a troca de senha)" if liberar_sensivel else ""
+        msg_vip = " (Acesso Total + Troca de Senha)" if liberar_sensivel else ""
         await update.message.reply_text(
             f"✅ **Acesso Concedido!**\n\n"
             f"👤 **ID Cliente:** `{user_id_cliente}`\n"
@@ -227,8 +221,7 @@ async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         await update.message.reply_text(
             "⚠️ **Uso correto:** `/autorizar ID_CLIENTE EMAIL DIAS [vip]`\n\n"
-            "Exemplo normal: `/autorizar 123456789 conta@gmail.com 30`\n"
-            "Exemplo VIP (libera senha): `/autorizar 123456789 conta@gmail.com 30 vip`",
+            "• Para liberar **TODOS** os e-mails:\n`/autorizar ID_CLIENTE * DIAS vip`",
             parse_mode="Markdown"
         )
 
@@ -247,18 +240,23 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
     dados_cliente = clientes.get(user_id, {})
     eh_admin = (user_id == str(ADMIN_ID))
     
-    # Define se quem consulta pode ver e-mails de redefinição/troca
     pode_acessar_sensivel = eh_admin or dados_cliente.get("permitir_sensivel", False)
 
     if not eh_admin:
-        if not dados_cliente or email_original not in dados_cliente.get("emails_permitidos", {}):
+        emails_permitidos = dados_cliente.get("emails_permitidos", {})
+        
+        # Checa se tem permissão total (*) ou o e-mail específico
+        tem_acesso = "*" in emails_permitidos or email_original in emails_permitidos
+
+        if not dados_cliente or not tem_acesso:
             await update.message.reply_text(
                 f"❌ Você não tem autorização para acessar os códigos do e-mail `{email_original}`.",
                 parse_mode="Markdown"
             )
             return
 
-        data_expiracao_str = dados_cliente["emails_permitidos"][email_original]
+        # Pega a data de expiração do e-mail específico ou do coringa (*)
+        data_expiracao_str = emails_permitidos.get(email_original) or emails_permitidos.get("*")
         data_expiracao = datetime.strptime(data_expiracao_str, "%Y-%m-%d").date()
 
         if datetime.now().date() > data_expiracao:
