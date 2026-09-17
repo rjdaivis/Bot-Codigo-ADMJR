@@ -74,12 +74,11 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
         mail.login(email_usuario, senha)
         mail.select("INBOX")
 
-        # Otimização: Busca apenas e-mails recebidos HOJE para ser ultra rápido
+        # Otimização: Busca e-mails recebidos HOJE para garantir resposta em instantes
         data_hoje = datetime.now(timezone.utc).strftime("%d-%b-%Y")
         _, messages = mail.search(None, f'(SINCE "{data_hoje}")')
         id_list = messages[0].split()
 
-        # Se não houver e-mails hoje, faz busca rápida geral dos últimos
         if not id_list:
             _, messages = mail.search(None, "ALL")
             id_list = messages[0].split()
@@ -109,39 +108,41 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
             return (
                 f"⚠️ **Código Expirado!**\n\n"
                 f"O último e-mail recebido nesta caixa chegou há **{minutos_passados} minutos** (limite é 20 min).\n"
-                f"Solicite um novo código no aplicativo/site da TV."
+                f"Solicite um novo código no aplicativo/site."
             )
 
-        # 2. Valida se o e-mail recente foi enviado para a variação específica do cliente
-        header_para = msg.get("To", "").lower()
-        if email_destinatario not in header_para:
-            mail.logout()
-            return (
-                f"⚠️ **E-mail divergente!**\n\n"
-                f"O último e-mail recebido não foi destinado a `{email_destinatario}`.\n"
-                f"Certifique-se de ter solicitado o código na TV para essa variação exata."
-            )
-
+        # 2. Extrai corpo em Texto e HTML (Evita falhar em e-mails visuais da Netflix/Disney)
         corpo = ""
+        corpo_html = ""
+
         if msg.is_multipart():
             for part in msg.walk():
                 content_type = part.get_content_type()
                 content_disposition = str(part.get("Content-Disposition"))
-                if content_type == "text/plain" and "attachment" not in content_disposition:
-                    corpo = part.get_payload(decode=True).decode(errors="ignore")
-                    break
+                if "attachment" not in content_disposition:
+                    if content_type == "text/plain":
+                        corpo += part.get_payload(decode=True).decode(errors="ignore") + "\n"
+                    elif content_type == "text/html":
+                        corpo_html += part.get_payload(decode=True).decode(errors="ignore") + "\n"
         else:
             corpo = msg.get_payload(decode=True).decode(errors="ignore")
 
         mail.logout()
 
-        match_codigo = re.search(r'\b\d{4,8}\b', corpo)
-        match_link = re.search(r'https?://[^\s<>"]+(?:update-primary-location|confirm|verify|household)[^\s<>"]*', corpo)
+        texto_completo = corpo + "\n" + corpo_html
+
+        # 3. Busca por códigos de acesso numéricos (4 a 8 dígitos) e links de login/confirmação
+        match_codigo = re.search(r'(?:código|codigo|code|senha|acesso)[\s\S]{0,50}?(\b\d{4,8}\b)', texto_completo, re.IGNORECASE)
+        if not match_codigo:
+            match_codigo = re.search(r'\b\d{4,8}\b', texto_completo)
+
+        match_link = re.search(r'https?://[^\s<>"]+(?:update-primary-location|confirm|verify|household|login|account|auth)[^\s<>"]*', texto_completo, re.IGNORECASE)
 
         if match_codigo:
+            codigo_extraido = match_codigo.group(1) if match_codigo.lastindex else match_codigo.group(0)
             return (
                 f"✅ **Código Encontrado!**\n\n"
-                f"🔑 Seu código é: `{match_codigo.group(0)}`\n\n"
+                f"🔑 Seu código é: `{codigo_extraido}`\n\n"
                 f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
             )
         elif match_link:
