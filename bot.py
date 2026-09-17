@@ -6,11 +6,12 @@ import email
 from email.utils import parsedate_to_datetime
 from datetime import datetime, timezone, timedelta
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
-    CallbackQueryHandler,
+    MessageHandler,
+    filters,
     ContextTypes
 )
 
@@ -66,7 +67,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
             return (
                 f"⚠️ **Código Expirado!**\n\n"
                 f"O último e-mail nesta conta foi recebido há **{minutos_passados} minutos**.\n"
-                f"Solicite a atualização de residência novamente no app da TV."
+                f"Solicite a atualização de residência novamente no app da TV/Dispositivo."
             )
 
         corpo = ""
@@ -82,8 +83,9 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
 
         mail.logout()
 
+        # Captura códigos numéricos comuns (4 a 8 dígitos) ou links de verificação
         match_codigo = re.search(r'\b\d{4,8}\b', corpo)
-        match_link = re.search(r'https?://[^\s<>"]+(?:update-primary-location|confirm|verify)[^\s<>"]*', corpo)
+        match_link = re.search(r'https?://[^\s<>"]+(?:update-primary-location|confirm|verify|household)[^\s<>"]*', corpo)
 
         if match_codigo:
             return (
@@ -101,82 +103,60 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
 
     except Exception as e:
         logging.error(f"Erro IMAP: {e}")
-        return f"❌ Erro ao acessar a caixa de e-mail."
+        return "❌ Erro ao acessar a caixa de e-mail. Verifique a senha de aplicativo/configuração."
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    contas = carregar_contas()
-    if not contas:
-        await update.message.reply_text("Nenhuma conta cadastrada.")
-        return
-
-    keyboard = []
-    for email_key, info in contas.items():
-        nome_botao = info.get("nome_exibicao", email_key)
-        keyboard.append([InlineKeyboardButton(f"📧 {nome_botao}", callback_data=f"check:{email_key}")])
-
-    reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
-        "👋 **Central de Códigos de Residência**\n\n"
-        "Selecione a tela/e-mail para buscar o código de verificação recebido nos últimos 15 minutos:",
-        reply_markup=reply_markup,
+        "👋 **Central de Liberação de Códigos**\n\n"
+        "Envie uma mensagem digitando o **e-mail do seu login** para buscar o código de verificação recebido nos últimos 15 minutos.\n\n"
+        "Exemplo: `seuemail@gmail.com`",
         parse_mode="Markdown"
     )
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    texto_usuario = update.message.text.strip().lower()
 
-    data = query.data
-    if data.startswith("check:"):
-        email_selecionado = data.split("check:")[1]
-        contas = carregar_contas()
-
-        if email_selecionado not in contas:
-            await query.edit_message_text("❌ Conta não encontrada.")
-            return
-
-        info_conta = contas[email_selecionado]
-        dados_completos = {**info_conta, "email_usuario": email_selecionado}
-
-        await query.edit_message_text(
-            f"⏳ *Buscando código recente para:* `{email_selecionado}`...\nAguarde alguns segundos.",
+    # Validação simples para ver se o que foi digitado parece um e-mail
+    if not re.match(r"^[\w\.-]+@[\w\.-]+\.\w+$", texto_usuario):
+        await update.message.reply_text(
+            "⚠️ Por favor, digite um **endereço de e-mail válido**.\nExemplo: `exemplo@gmail.com`",
             parse_mode="Markdown"
         )
+        return
 
-        loop = context.application.loop
-        resultado = await loop.run_in_executor(None, extrair_codigo_imap_wrapper, dados_completos)
+    contas = carregar_contas()
 
-        keyboard = [[InlineKeyboardButton("🔄 Voltar ao Menu", callback_data="menu_principal")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
-        await query.edit_message_text(
-            resultado,
-            reply_markup=reply_markup,
+    if texto_usuario not in contas:
+        await update.message.reply_text(
+            f"❌ O e-mail `{texto_usuario}` não está cadastrado em nosso sistema.\n"
+            f"Verifique se digitou corretamente.",
             parse_mode="Markdown"
         )
+        return
 
-    elif data == "menu_principal":
-        contas = carregar_contas()
-        keyboard = []
-        for email_key, info in contas.items():
-            nome_botao = info.get("nome_exibicao", email_key)
-            keyboard.append([InlineKeyboardButton(f"📧 {nome_botao}", callback_data=f"check:{email_key}")])
+    info_conta = contas[texto_usuario]
+    dados_completos = {**info_conta, "email_usuario": texto_usuario}
 
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(
-            "👋 **Central de Códigos de Residência**\n\n"
-            "Selecione a tela/e-mail para buscar o código de verificação recebido nos últimos 15 minutos:",
-            reply_markup=reply_markup,
-            parse_mode="Markdown"
-        )
+    msg_carregando = await update.message.reply_text(
+        f"⏳ *Buscando código recente para:* `{texto_usuario}`...\nAguarde alguns segundos.",
+        parse_mode="Markdown"
+    )
+
+    loop = context.application.loop
+    resultado = await loop.run_in_executor(None, extrair_codigo_imap_wrapper, dados_completos)
+
+    await msg_carregando.edit_text(resultado, parse_mode="Markdown")
 
 def main():
     app = ApplicationBuilder().token(TOKEN_TELEGRAM).build()
+
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button_handler))
+    # Captura qualquer mensagem de texto que o cliente enviar
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receber_mensagem_email))
+
     print("🤖 Bot rodando...")
     app.run_polling()
 
 if __name__ == "__main__":
     main()
-  
+    
