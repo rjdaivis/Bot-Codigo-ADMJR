@@ -9,15 +9,6 @@ from flask import Flask
 from email.utils import parsedate_to_datetime
 from datetime import datetime, timezone, timedelta
 
-from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    filters,
-    ContextTypes
-)
-
 # Configuração de Logs
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -25,36 +16,51 @@ logging.basicConfig(
 )
 
 TOKEN_TELEGRAM = "8621009761:AAF3vIBd5--2FDxSJsDCJSpGYcfSf64tpjc"
+ADMIN_ID = 123456789  # Substitua pelo seu ID numérico do Telegram
 
-# Servidor Flask simples para compatibilidade com o plano Free (Web Service) do Render
+# Servidor Flask simples para manter o Web Service ativo no Render Free
 app_flask = Flask('')
 
 @app_flask.route('/')
 def home():
-    return "Bot de Códigos do Telegram está ativo e rodando!"
+    return "Bot de Códigos com Validade está ativo!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app_flask.run(host='0.0.0.0', port=port)
 
-def carregar_contas():
+# --- Gerenciamento de Arquivos JSON ---
+
+def carregar_json(caminho: str) -> dict:
     try:
-        with open("contas.json", "r", encoding="utf-8") as f:
-            return json.load(f)
+        if os.path.exists(caminho):
+            with open(caminho, "r", encoding="utf-8") as f:
+                return json.load(f)
+        return {}
     except Exception as e:
-        logging.error(f"Erro ao carregar contas.json: {e}")
+        logging.error(f"Erro ao carregar {caminho}: {e}")
         return {}
 
+def salvar_json(caminho: str, dados: dict):
+    try:
+        with open(caminho, "w", encoding="utf-8") as f:
+            json.dump(dados, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        logging.error(f"Erro ao salvar {caminho}: {e}")
+
 def normalizar_email_gmail(email_str: str) -> str:
-    """Remove os pontos da parte local do e-mail para contas @gmail.com para localizar a conta base."""
+    """Remove os pontos e tags '+' da parte local do e-mail para localizar a conta base no IMAP."""
     partes = email_str.strip().lower().split('@')
     if len(partes) != 2:
         return email_str.strip().lower()
     
     usuario, dominio = partes
     if dominio == "gmail.com":
-        usuario = usuario.replace(".", "")
+        usuario = usuario.split('+')[0]  # Remove alias com +
+        usuario = usuario.replace(".", "") # Remove pontos
     return f"{usuario}@{dominio}"
+
+# --- Leitura da Caixa de Entrada via IMAP ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -79,32 +85,32 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
         _, data = mail.fetch(latest_id, "(RFC822)")
         msg = email.message_from_bytes(data[0][1])
 
-        # Validação do destinatário exato (incluindo as variações de pontos)
+        # Valida se o e-mail recente foi enviado para a variação específica do cliente
         header_para = msg.get("To", "").lower()
         if email_destinatario not in header_para:
             mail.logout()
             return (
                 f"⚠️ **E-mail divergente!**\n\n"
-                f"O último e-mail recebido nesta caixa de entrada não foi enviado para `{email_destinatario}`.\n"
-                f"Certifique-se de ter solicitado o código na TV para esta variação exata."
+                f"O último e-mail recebido nesta caixa não foi destinado a `{email_destinatario}`.\n"
+                f"Solicite a atualização do código na TV para esse e-mail exato."
             )
 
         data_email_header = msg.get("Date")
         if not data_email_header:
             mail.logout()
-            return "❌ Não foi possível verificar o horário do último e-mail."
+            return "❌ Não foi possível verificar o horário do e-mail."
 
         data_email = parsedate_to_datetime(data_email_header)
         agora = datetime.now(timezone.utc)
-
         diferenca_tempo = agora - data_email
+
         if diferenca_tempo > timedelta(minutes=15):
             minutos_passados = int(diferenca_tempo.total_seconds() // 60)
             mail.logout()
             return (
                 f"⚠️ **Código Expirado!**\n\n"
                 f"O último e-mail para esta conta foi recebido há **{minutos_passados} minutos**.\n"
-                f"Solicite a atualização de residência novamente no app da TV/Dispositivo."
+                f"Solicite um novo código no aplicativo da TV."
             )
 
         corpo = ""
@@ -120,7 +126,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
 
         mail.logout()
 
-        # Captura códigos numéricos comuns (4 a 8 dígitos) ou links de verificação
         match_codigo = re.search(r'\b\d{4,8}\b', corpo)
         match_link = re.search(r'https?://[^\s<>"]+(?:update-primary-location|confirm|verify|household)[^\s<>"]*', corpo)
 
@@ -140,17 +145,62 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
 
     except Exception as e:
         logging.error(f"Erro IMAP: {e}")
-        return "❌ Erro ao acessar a caixa de e-mail. Verifique a senha de aplicativo ou as configurações."
+        return "❌ Erro ao acessar a caixa de e-mail. Verifique as credenciais no sistema."
+
+# --- Handlers do Bot do Telegram ---
+
+from telegram import Update
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ContextTypes
+)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
     await update.message.reply_text(
-        "👋 **Central de Liberação de Códigos**\n\n"
-        "Envie uma mensagem digitando o **e-mail do seu login** para buscar o código de verificação recebido nos últimos 15 minutos.\n\n"
-        "Exemplo: `seuemail@gmail.com`",
+        f"👋 **Central de Liberação de Códigos**\n\n"
+        f"Seu ID do Telegram: `{user_id}`\n\n"
+        f"Envie o **e-mail do seu login** para buscar o código de verificação recebido nos últimos 15 minutos.",
         parse_mode="Markdown"
     )
 
+async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    try:
+        user_id_cliente = str(context.args[0])
+        email_cliente = context.args[1].strip().lower()
+        dias = int(context.args[2])
+
+        clientes = carregar_json("clientes.json")
+        data_validade = (datetime.now() + timedelta(days=dias)).strftime("%Y-%m-%d")
+
+        if user_id_cliente not in clientes:
+            clientes[user_id_cliente] = {"emails_permitidos": {}}
+
+        clientes[user_id_cliente]["emails_permitidos"][email_cliente] = data_validade
+        salvar_json("clientes.json", clientes)
+
+        await update.message.reply_text(
+            f"✅ **Acesso Concedido!**\n\n"
+            f"👤 **ID Cliente:** `{user_id_cliente}`\n"
+            f"📧 **E-mail:** `{email_cliente}`\n"
+            f"📅 **Válido até:** {data_validade} ({dias} dias)",
+            parse_mode="Markdown"
+        )
+    except Exception:
+        await update.message.reply_text(
+            "⚠️ **Uso correto do comando:**\n`/autorizar ID_CLIENTE EMAIL DIAS`\n\n"
+            "Exemplo: `/autorizar 123456789 conta+tv@gmail.com 30`",
+            parse_mode="Markdown"
+        )
+
 async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
     email_original = update.message.text.strip().lower()
 
     if not re.match(r"^[\w\.-]+@[\w\.-]+\.\w+$", email_original):
@@ -160,15 +210,39 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
         )
         return
 
-    email_base = normalizar_email_gmail(email_original)
-    contas = carregar_contas()
+    # 1. Checa a autorização do cliente
+    clientes = carregar_json("clientes.json")
+    dados_cliente = clientes.get(user_id)
 
-    # Procura pela variação exata com pontos ou pela conta principal sem pontos
+    if user_id != str(ADMIN_ID):
+        if not dados_cliente or email_original not in dados_cliente.get("emails_permitidos", {}):
+            await update.message.reply_text(
+                f"❌ Você não tem autorização para acessar os códigos do e-mail `{email_original}`.\n"
+                f"Entre em contato com o suporte para vincular esta conta.",
+                parse_mode="Markdown"
+            )
+            return
+
+        data_expiracao_str = dados_cliente["emails_permitidos"][email_original]
+        data_expiracao = datetime.strptime(data_expiracao_str, "%Y-%m-%d").date()
+
+        if datetime.now().date() > data_expiracao:
+            await update.message.reply_text(
+                f"⚠️ **Assinatura Expirada!**\n\n"
+                f"O seu período de acesso para o e-mail `{email_original}` venceu em **{data_expiracao_str}**.\n"
+                f"Entre em contato com o administrador para renovar.",
+                parse_mode="Markdown"
+            )
+            return
+
+    # 2. Localiza as credenciais IMAP no contas.json
+    email_base = normalizar_email_gmail(email_original)
+    contas = carregar_json("contas.json")
     conta_encontrada = contas.get(email_original) or contas.get(email_base)
 
     if not conta_encontrada:
         await update.message.reply_text(
-            f"❌ O e-mail `{email_original}` não está associado a nenhuma conta cadastrada.",
+            f"❌ A conta `{email_original}` não possui as credenciais cadastrais no servidor.",
             parse_mode="Markdown"
         )
         return
@@ -195,6 +269,7 @@ def main():
     app = ApplicationBuilder().token(TOKEN_TELEGRAM).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("autorizar", autorizar_cliente))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receber_mensagem_email))
 
     print("🤖 Bot rodando...")
@@ -202,3 +277,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
