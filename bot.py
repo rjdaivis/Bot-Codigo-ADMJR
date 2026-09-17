@@ -74,25 +74,20 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
         mail.login(email_usuario, senha)
         mail.select("INBOX")
 
-        # Otimização: Busca e-mails recebidos HOJE para garantir resposta em instantes
-        data_hoje = datetime.now(timezone.utc).strftime("%d-%b-%Y")
-        _, messages = mail.search(None, f'(SINCE "{data_hoje}")')
+        # Busca os últimos e-mails diretamente pela lista da caixa de entrada
+        _, messages = mail.search(None, "ALL")
         id_list = messages[0].split()
-
-        if not id_list:
-            _, messages = mail.search(None, "ALL")
-            id_list = messages[0].split()
 
         if not id_list:
             mail.logout()
             return "❌ Nenhum e-mail foi encontrado nesta caixa de entrada."
 
-        # Pega a mensagem mais recente
+        # Pega a mensagem mais recente (última da lista)
         latest_id = id_list[-1]
         _, data = mail.fetch(latest_id, "(RFC822)")
         msg = email.message_from_bytes(data[0][1])
 
-        # 1. Valida se a mensagem chegou nos últimos 20 minutos
+        # 1. Validação de horário da mensagem (Ajustado para 15 minutos)
         data_email_header = msg.get("Date")
         if not data_email_header:
             mail.logout()
@@ -102,16 +97,16 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
         agora = datetime.now(timezone.utc)
         diferenca_tempo = agora - data_email
 
-        if diferenca_tempo > timedelta(minutes=20):
+        if diferenca_tempo > timedelta(minutes=15):
             minutos_passados = int(diferenca_tempo.total_seconds() // 60)
             mail.logout()
             return (
                 f"⚠️ **Código Expirado!**\n\n"
-                f"O último e-mail recebido nesta caixa chegou há **{minutos_passados} minutos** (limite é 20 min).\n"
-                f"Solicite um novo código no aplicativo/site."
+                f"O último e-mail recebido nesta caixa chegou há **{minutos_passados} minutos** (o limite é de 15 min).\n"
+                f"Solicite um novo código na Netflix e tente novamente."
             )
 
-        # 2. Extrai corpo em Texto e HTML (Evita falhar em e-mails visuais da Netflix/Disney)
+        # 2. Extração do corpo (Texto puro e HTML)
         corpo = ""
         corpo_html = ""
 
@@ -131,18 +126,14 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
 
         texto_completo = corpo + "\n" + corpo_html
 
-        # 3. Busca por códigos de acesso numéricos (4 a 8 dígitos) e links de login/confirmação
-        match_codigo = re.search(r'(?:código|codigo|code|senha|acesso)[\s\S]{0,50}?(\b\d{4,8}\b)', texto_completo, re.IGNORECASE)
-        if not match_codigo:
-            match_codigo = re.search(r'\b\d{4,8}\b', texto_completo)
-
-        match_link = re.search(r'https?://[^\s<>"]+(?:update-primary-location|confirm|verify|household|login|account|auth)[^\s<>"]*', texto_completo, re.IGNORECASE)
+        # 3. Regex para extração de números de 4 a 8 dígitos (padrão Netflix) e links de login
+        match_codigo = re.search(r'\b\d{4,8}\b', texto_completo)
+        match_link = re.search(r'https?://[^\s<>"]+(?:update-primary-location|confirm|verify|household|login|account|auth|code)[^\s<>"]*', texto_completo, re.IGNORECASE)
 
         if match_codigo:
-            codigo_extraido = match_codigo.group(1) if match_codigo.lastindex else match_codigo.group(0)
             return (
                 f"✅ **Código Encontrado!**\n\n"
-                f"🔑 Seu código é: `{codigo_extraido}`\n\n"
+                f"🔑 Seu código é: `{match_codigo.group(0)}`\n\n"
                 f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
             )
         elif match_link:
@@ -151,7 +142,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
                 f"🔗 Clique no link abaixo para liberar:\n{match_link.group(0)}"
             )
         else:
-            return "⚠️ Um e-mail recente foi encontrado (no prazo de 20 min), mas o código não pôde ser lido automaticamente."
+            return "⚠️ Um e-mail recente foi encontrado (no prazo de 15 min), mas o código não pôde ser lido automaticamente."
 
     except Exception as e:
         logging.error(f"Erro IMAP: {e}")
@@ -173,7 +164,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"👋 **Central de Liberação de Códigos**\n\n"
         f"Seu ID do Telegram: `{user_id}`\n\n"
-        f"Envie o **e-mail do seu login** para buscar o código de verificação recebido nos últimos 20 minutos.",
+        f"Envie o **e-mail do seu login** para buscar o código de verificação recebido nos últimos 15 minutos.",
         parse_mode="Markdown"
     )
 
