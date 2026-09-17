@@ -58,9 +58,9 @@ def normalizar_email_gmail(email_str: str) -> str:
         usuario = usuario.replace(".", "")
     return f"{usuario}@{dominio}"
 
-# --- Leitura IMAP Segura ---
+# --- Leitura IMAP com Filtro de Segurança Inteligente ---
 
-def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
+def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
     host = dados_conta.get("host_imap", "imap.gmail.com")
     porta = dados_conta.get("porta", 993)
@@ -101,6 +101,8 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
             if diferenca_tempo > timedelta(minutes=15):
                 continue
 
+            assunto = str(msg.get("Subject", "")).lower()
+
             corpo = ""
             if msg.is_multipart():
                 for part in msg.walk():
@@ -116,8 +118,32 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
                 if payload:
                     corpo = payload.decode(errors="ignore")
 
+            texto_analise = (assunto + " " + corpo).lower()
+
+            # --- VERIFICAÇÃO DE SEGURANÇA ---
+            # Se NÃO for ADM e NÃO tiver permissão especial de sensível, bloqueia redefinições
+            if not pode_acessar_sensivel:
+                termos_proibidos = [
+                    "redefinir sua senha", "redefinir a sua senha", "reset password", 
+                    "alterar sua senha", "alterar o e-mail", "alterar email",
+                    "troca de e-mail", "troca de email", "change email",
+                    "solicitação de redefinição", "atualize seu e-mail", "recuperação de conta"
+                ]
+
+                for termo in termos_proibidos:
+                    if termo in texto_analise:
+                        mail.logout()
+                        return (
+                            "🚫 **Solicitação Não Permitida!**\n\n"
+                            "Este e-mail trata-se de uma alteração de senha ou mudança de e-mail da conta.\n"
+                            "Por motivos de segurança, esses códigos não são exibidos para o seu usuário."
+                        )
+
+            # Busca por números de 4 a 8 dígitos (Disney, Netflix, Globoplay, etc.)
             match_codigo = re.search(r'\b\d{4,8}\b', corpo)
-            match_link = re.search(r'https?://[^\s<>"]+(?:update-primary-location|confirm|verify|household|login|account|auth|code)[^\s<>"]*', corpo, re.IGNORECASE)
+            
+            # Captura de links gerais (Globoplay, Netflix, Disney, etc.)
+            match_link = re.search(r'https?://[^\s<>"]+(?:update-primary-location|confirm|verify|household|login|account|auth|code|pass|reset|globo)[^\s<>"]*', corpo, re.IGNORECASE)
 
             if match_codigo:
                 mail.logout()
@@ -129,15 +155,15 @@ def extrair_codigo_imap_wrapper(dados_conta: dict) -> str:
             elif match_link:
                 mail.logout()
                 return (
-                    f"✅ **Link de Validação Encontrado!**\n\n"
-                    f"🔗 Clique no link abaixo para liberar:\n{match_link.group(0)}"
+                    f"✅ **Link de Validação/Acesso Encontrado!**\n\n"
+                    f"🔗 Clique no link abaixo para acessar:\n{match_link.group(0)}"
                 )
 
         mail.logout()
         return "⚠️ Nenhum e-mail com código recebido nos últimos 15 minutos foi localizado nesta caixa."
 
     except socket.timeout:
-        return "❌ O servidor do Gmail demorou muito para responder (Timeout). Tente novamente em alguns instantes."
+        return "❌ O servidor de e-mail demorou muito para responder (Timeout). Tente novamente."
     except Exception as e:
         logging.error(f"Erro IMAP: {e}")
         return "❌ Erro de autenticação IMAP. Verifique se a Senha de Aplicativo de 16 dígitos está correta no `contas.json`."
@@ -170,26 +196,39 @@ async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id_cliente = str(context.args[0])
         email_cliente = context.args[1].strip().lower()
         dias = int(context.args[2])
+        
+        # Opcional: passa "vip" ou "sensivel" no final do comando para liberar trocas de senha
+        liberar_sensivel = False
+        if len(context.args) > 3 and context.args[3].lower() in ["vip", "sensivel", "true"]:
+            liberar_sensivel = True
 
         clientes = carregar_json("clientes.json")
         data_validade = (datetime.now() + timedelta(days=dias)).strftime("%Y-%m-%d")
 
         if user_id_cliente not in clientes:
-            clientes[user_id_cliente] = {"emails_permitidos": {}}
+            clientes[user_id_cliente] = {
+                "emails_permitidos": {},
+                "permitir_sensivel": liberar_sensivel
+            }
+        else:
+            clientes[user_id_cliente]["permitir_sensivel"] = liberar_sensivel
 
         clientes[user_id_cliente]["emails_permitidos"][email_cliente] = data_validade
         salvar_json("clientes.json", clientes)
 
+        msg_vip = " (Com acesso a troca de senha)" if liberar_sensivel else ""
         await update.message.reply_text(
             f"✅ **Acesso Concedido!**\n\n"
             f"👤 **ID Cliente:** `{user_id_cliente}`\n"
             f"📧 **E-mail:** `{email_cliente}`\n"
-            f"📅 **Válido até:** {data_validade} ({dias} dias)",
+            f"📅 **Válido até:** {data_validade} ({dias} dias){msg_vip}",
             parse_mode="Markdown"
         )
     except Exception:
         await update.message.reply_text(
-            "⚠️ **Uso correto:** `/autorizar ID_CLIENTE EMAIL DIAS`",
+            "⚠️ **Uso correto:** `/autorizar ID_CLIENTE EMAIL DIAS [vip]`\n\n"
+            "Exemplo normal: `/autorizar 123456789 conta@gmail.com 30`\n"
+            "Exemplo VIP (libera senha): `/autorizar 123456789 conta@gmail.com 30 vip`",
             parse_mode="Markdown"
         )
 
@@ -205,9 +244,13 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     clientes = carregar_json("clientes.json")
-    dados_cliente = clientes.get(user_id)
+    dados_cliente = clientes.get(user_id, {})
+    eh_admin = (user_id == str(ADMIN_ID))
+    
+    # Define se quem consulta pode ver e-mails de redefinição/troca
+    pode_acessar_sensivel = eh_admin or dados_cliente.get("permitir_sensivel", False)
 
-    if user_id != str(ADMIN_ID):
+    if not eh_admin:
         if not dados_cliente or email_original not in dados_cliente.get("emails_permitidos", {}):
             await update.message.reply_text(
                 f"❌ Você não tem autorização para acessar os códigos do e-mail `{email_original}`.",
@@ -252,9 +295,8 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
         parse_mode="Markdown"
     )
 
-    # CORREÇÃO DO ERRO DO LOG: Usa o loop assíncrono padrão do asyncio
     loop = asyncio.get_running_loop()
-    resultado = await loop.run_in_executor(None, extrair_codigo_imap_wrapper, dados_completos)
+    resultado = await loop.run_in_executor(None, extrair_codigo_imap_wrapper, dados_completos, pode_acessar_sensivel)
 
     await msg_carregando.edit_text(resultado, parse_mode="Markdown")
 
