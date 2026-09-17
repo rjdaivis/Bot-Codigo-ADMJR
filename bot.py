@@ -58,19 +58,17 @@ def normalizar_email_gmail(email_str: str) -> str:
     if dominio == "gmail.com":
         usuario = usuario.split('+')[0]
         usuario = usuario.replace(".", "")
-    return f"{usuario}@{dominio}"
+        return f"{usuario}@{dominio}"
+    return email_str.strip().lower()
 
 def limpar_e_decodificar_texto(texto: str) -> str:
-    """Decodifica HTML Entities (ex: &#x3D; vira =) e limpa o texto do e-mail."""
     if not texto:
         return ""
-    # Decodifica entidades HTML como &#x3D; -> = e &amp; -> &
     texto_decodificado = html.unescape(texto)
-    # Remove quebras de linha acidentais dentro de URLs causadas por Quoted-Printable
     texto_limpo = re.sub(r'=\r?\n', '', texto_decodificado)
     return texto_limpo
 
-# --- Leitura IMAP de Alta Performance com Decodificação de Link ---
+# --- Leitura IMAP Inteligente com Priorização Correta ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -130,11 +128,10 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 if payload:
                     corpo = payload.decode(errors="ignore")
 
-            # Limpa e decodifica caracteres HTML (Converte &#x3D; para =)
             corpo_processado = limpar_e_decodificar_texto(corpo)
             texto_analise = (assunto + " " + corpo_processado).lower()
 
-            # --- VERIFICAÇÃO DE SEGURANÇA ---
+            # --- VERIFICAÇÃO DE SEGURANÇA PARA CLIENTES ---
             if not pode_acessar_sensivel:
                 termos_proibidos = [
                     "redefinir sua senha", "redefinir a sua senha", "reset password", 
@@ -153,11 +150,9 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                             "Por motivos de segurança, esses links/códigos não são exibidos para o seu usuário."
                         )
 
-            # 1. Busca específica para Link de Redefinição da Globo (Após decodificar o HTML)
+            # 1. PRIORIDADE 1: Link de Redefinição de Senha Explicito (ex: Globo Play / Redefinição)
             match_globo = re.search(r'https://login\.globo\.com/recuperacaoSenha/[^\s<>"\'\);]+', corpo_processado, re.IGNORECASE)
-            
-            # 2. Busca genérica para links de acesso/verificação (Disney, Netflix, etc.)
-            match_link_geral = re.search(r'https?://[^\s<>"\'\);]+(?:update-primary-location|confirm|verify|household|login|account|auth|code|reset)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
+            match_reset_especifico = re.search(r'https?://[^\s<>"\'\);]+(?:recuperacaosenha|reset-password|password-reset)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
 
             if match_globo:
                 mail.logout()
@@ -167,22 +162,33 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"🔗 Clique no link abaixo para criar a nova senha:\n{link_limpo}\n\n"
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
-            elif match_link_geral:
+            elif match_reset_especifico:
                 mail.logout()
-                link_limpo = match_link_geral.group(0).rstrip('.,;)')
+                link_limpo = match_reset_especifico.group(0).rstrip('.,;)')
                 return (
-                    f"✅ **Link de Validação/Acesso Encontrado!**\n\n"
-                    f"🔗 Clique no link abaixo para acessar:\n{link_limpo}\n\n"
+                    f"✅ **Link de Redefinição Encontrado!**\n\n"
+                    f"🔗 Clique no link abaixo para alterar a senha:\n{link_limpo}\n\n"
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
-            # 3. Código numérico (se não houver links no e-mail)
+            # 2. PRIORIDADE 2: Código numérico de 4 a 8 dígitos (Netflix, Disney, etc.)
             match_codigo = re.search(r'\b\d{4,8}\b', corpo_processado)
             if match_codigo:
                 mail.logout()
                 return (
                     f"✅ **Código Encontrado!**\n\n"
                     f"🔑 Seu código é: `{match_codigo.group(0)}`\n\n"
+                    f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
+                )
+
+            # 3. PRIORIDADE 3: Links genéricos de acesso/verificação secundários
+            match_link_geral = re.search(r'https?://[^\s<>"\'\);]+(?:update-primary-location|confirm|verify|household|auth|code)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
+            if match_link_geral:
+                mail.logout()
+                link_limpo = match_link_geral.group(0).rstrip('.,;)')
+                return (
+                    f"✅ **Link de Validação/Acesso Encontrado!**\n\n"
+                    f"🔗 Clique no link abaixo para acessar:\n{link_limpo}\n\n"
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
