@@ -24,7 +24,7 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-TOKEN_TELEGRAM = "SEU_TOKEN_DO_TELEGRAM_AQUI"
+TOKEN_TELEGRAM = "8621009761:AAF3vIBd5--2FDxSJsDCJSpGYcfSf64tpjc"
 
 # Servidor Flask simples para manter o serviço ativo no plano Free (Web Service) do Render
 app_flask = Flask('')
