@@ -69,7 +69,7 @@ def limpar_e_decodificar_texto(texto: str) -> str:
     texto_limpo = re.sub(r'=\r?\n', '', texto_decodificado)
     return texto_limpo
 
-# --- Leitura IMAP Inteligente e Estável ---
+# --- Leitura IMAP Precisa (Disney, Globo, Netflix) ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -181,17 +181,29 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
-            # 2. PRIORIDADE 2: Código numérico (Filtra e ignora anos como 1999 ou 2026)
+            # 2. PRIORIDADE 2: Regra Específica para Disney+ (Procura o PIN perto do texto indicativo)
+            match_disney = re.search(r'(?:código de acesso|código é|código de verificação)[^\d]{1,50}(\d{6})\b', corpo_processado, re.IGNORECASE)
+            
+            # Código de 6 dígitos genérico (ignora anos 19XX/20XX)
             match_codigo_6 = re.search(r'\b(?!(?:19|20)\d{2}\b)\d{6}\b', corpo_processado)
+            
+            # Código numérico de 4 a 8 dígitos genérico
             match_codigo_geral = re.search(r'\b(?!(?:19|20)\d{2}\b)\d{4,8}\b', corpo_processado)
-            codigo_encontrado = match_codigo_6 or match_codigo_geral
 
-            if codigo_encontrado:
+            codigo_final = None
+            if match_disney:
+                codigo_final = match_disney.group(1)
+            elif match_codigo_6:
+                codigo_final = match_codigo_6.group(0)
+            elif match_codigo_geral:
+                codigo_final = match_codigo_geral.group(0)
+
+            if codigo_final:
                 mail.close()
                 mail.logout()
                 return (
                     f"✅ **Código Encontrado!**\n\n"
-                    f"🔑 Seu código é: `{codigo_encontrado.group(0)}`\n\n"
+                    f"🔑 Seu código é: `{codigo_final}`\n\n"
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
@@ -375,4 +387,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
