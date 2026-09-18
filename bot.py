@@ -69,7 +69,7 @@ def limpar_e_decodificar_texto(texto: str) -> str:
     texto_limpo = re.sub(r'=\r?\n', '', texto_decodificado)
     return texto_limpo
 
-# --- Leitura IMAP de Alta Estabilidade ---
+# --- Leitura IMAP Inteligente e Estável ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -181,14 +181,17 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
-            # 2. PRIORIDADE 2: Código numérico de 4 a 8 dígitos (Netflix, Disney, etc.)
-            match_codigo = re.search(r'\b\d{4,8}\b', corpo_processado)
-            if match_codigo:
+            # 2. PRIORIDADE 2: Código numérico (Filtra e ignora anos como 1999 ou 2026)
+            match_codigo_6 = re.search(r'\b(?!(?:19|20)\d{2}\b)\d{6}\b', corpo_processado)
+            match_codigo_geral = re.search(r'\b(?!(?:19|20)\d{2}\b)\d{4,8}\b', corpo_processado)
+            codigo_encontrado = match_codigo_6 or match_codigo_geral
+
+            if codigo_encontrado:
                 mail.close()
                 mail.logout()
                 return (
                     f"✅ **Código Encontrado!**\n\n"
-                    f"🔑 Seu código é: `{match_codigo.group(0)}`\n\n"
+                    f"🔑 Seu código é: `{codigo_encontrado.group(0)}`\n\n"
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
@@ -356,7 +359,6 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
 def main():
     Thread(target=run_flask, daemon=True).start()
 
-    # Loop Infinito com Auto-Reconexão em caso de desconexão de rede
     while True:
         try:
             app = ApplicationBuilder().token(TOKEN_TELEGRAM).build()
@@ -373,3 +375,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
