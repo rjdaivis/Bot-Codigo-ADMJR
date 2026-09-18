@@ -69,7 +69,7 @@ def limpar_e_decodificar_texto(texto: str) -> str:
     texto_limpo = re.sub(r'=\r?\n', '', texto_decodificado)
     return texto_limpo
 
-# --- Leitura IMAP com Filtro de E-mails Não Lidos (UNSEEN) ---
+# --- Leitura IMAP Inteligente (UNSEEN + Regex Precisa) ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -86,12 +86,11 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
         
         mail.select("INBOX")
 
-        # Procura APENAS por e-mails NÃO LIDOS
         status, messages = mail.search(None, "UNSEEN")
         if status != "OK" or not messages[0]:
             mail.close()
             mail.logout()
-            return "⚠️ Nenhum NOVO e-mail (não lido) recebido nos últimos 15 minutos foi localizado. Solicite o reenvio do código na plataforma."
+            return "⚠️ Nenhum NOVO e-mail (não lido) recebido nos últimos 15 minutos foi localizado nesta caixa. Solicite o reenvio do código na plataforma."
 
         id_list = messages[0].split()
         ultimos_ids = id_list[-10:]
@@ -141,10 +140,8 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
             # 1. PRIORIDADE MÁXIMA: Link da Conta Globo
             match_globo = re.search(r'https?://[^\s<>"\'\);]+globo\.com[^\s<>"\'\);]*(?:recuperacao|senha|login|token)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
-            
             if match_globo:
                 link_limpo = match_globo.group(0).rstrip('.,;)')
-                # Marca o e-mail como LIDO no servidor para não repetir nas próximas consultas
                 mail.store(msg_id, '+FLAGS', '\\Seen')
                 mail.close()
                 mail.logout()
@@ -186,20 +183,17 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
-            # 3. PRIORIDADE 3: Códigos de Verificação (Netflix, Disney, etc.)
-            match_netflix = re.search(r'(?:informe este código|código para entrar|código de acesso|código é)[^\d]{1,50}(\d{4,8})\b', corpo_processado, re.IGNORECASE)
-            match_disney = re.search(r'(?:código de acesso|código é|código de verificação)[^\d]{1,50}(\d{6})\b', corpo_processado, re.IGNORECASE)
-            
+            # 3. PRIORIDADE 3: Códigos Contextuais (Netflix, Disney+, Globoplay, etc.)
+            # Busca código numérico de 4 a 8 dígitos atrelado a frases chave do e-mail
+            match_contexto = re.search(r'(?:confirme com o código|informe este código|código de acesso|código é|código de verificação|seu código)[^\d]{1,60}(\d{4,8})\b', corpo_processado, re.IGNORECASE)
+
+            # Filtros genéricos de fallback (ignorando 0800, anos 19XX/20XX e cores hex)
             match_codigo_6 = re.search(r'\b(?!(?:19|20)\d{2}\b)(?!(?:232323|000000|ffffff)\b)\d{6}\b', corpo_processado)
-            match_codigo_4 = re.search(r'\b(?!(?:19|20)\d{2}\b)\d{4}\b', corpo_processado)
+            match_codigo_4 = re.search(r'\b(?!(?:19|20)\d{2}\b)(?!0800\b)\d{4}\b', corpo_processado)
 
             codigo_final = None
-            if match_netflix:
-                codigo_final = match_netflix.group(1)
-            elif match_disney:
-                codigo_final = match_disney.group(1)
-            elif "netflix" in texto_analise and match_codigo_4:
-                codigo_final = match_codigo_4.group(0)
+            if match_contexto:
+                codigo_final = match_contexto.group(1)
             elif match_codigo_6:
                 codigo_final = match_codigo_6.group(0)
             elif match_codigo_4:
