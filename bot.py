@@ -8,6 +8,7 @@ import socket
 import asyncio
 import html
 import quopri
+import time
 from threading import Thread
 from flask import Flask
 from email.utils import parsedate_to_datetime
@@ -25,7 +26,7 @@ app_flask = Flask('')
 
 @app_flask.route('/')
 def home():
-    return "Bot de Códigos Ativo"
+    return "Bot de Códigos 100% Ativo e Online"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
@@ -68,7 +69,7 @@ def limpar_e_decodificar_texto(texto: str) -> str:
     texto_limpo = re.sub(r'=\r?\n', '', texto_decodificado)
     return texto_limpo
 
-# --- Leitura IMAP com Suporte Inteligente a Encaminhados ---
+# --- Leitura IMAP de Alta Estabilidade ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -77,8 +78,9 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
     senha = dados_conta.get("senha_imap")
     email_solicitado = dados_conta.get("email_destinatario", "").lower()
 
+    mail = None
     try:
-        socket.setdefaulttimeout(10)
+        socket.setdefaulttimeout(12)
         mail = imaplib.IMAP4_SSL(host, porta)
         mail.login(email_usuario, senha)
         
@@ -86,12 +88,11 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
         status, messages = mail.search(None, "ALL")
         if status != "OK" or not messages[0]:
+            mail.close()
             mail.logout()
             return "❌ Nenhum e-mail foi encontrado nesta caixa de entrada."
 
         id_list = messages[0].split()
-        
-        # Pega os últimos 10 e-mails recebidos para garimpar encaminhados
         ultimos_ids = id_list[-10:]
         ultimos_ids.reverse()
 
@@ -133,7 +134,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             corpo_processado = limpar_e_decodificar_texto(corpo)
             texto_analise = (assunto + " " + corpo_processado).lower()
 
-            # Se for uma conta encaminhada, garante que a mensagem pertenca ao e-mail consultado
             if email_solicitado and email_solicitado not in email_usuario:
                 if email_solicitado not in texto_analise and email_solicitado not in str(msg.get("To", "")).lower():
                     continue
@@ -150,6 +150,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
                 for termo in termos_proibidos:
                     if termo in texto_analise:
+                        mail.close()
                         mail.logout()
                         return (
                             "🚫 **Solicitação Não Permitida!**\n\n"
@@ -162,6 +163,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             match_reset_especifico = re.search(r'https?://[^\s<>"\'\);]+(?:recuperacaosenha|reset-password|password-reset)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
 
             if match_globo:
+                mail.close()
                 mail.logout()
                 link_limpo = match_globo.group(0).rstrip('.,;)')
                 return (
@@ -170,6 +172,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
             elif match_reset_especifico:
+                mail.close()
                 mail.logout()
                 link_limpo = match_reset_especifico.group(0).rstrip('.,;)')
                 return (
@@ -181,6 +184,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             # 2. PRIORIDADE 2: Código numérico de 4 a 8 dígitos (Netflix, Disney, etc.)
             match_codigo = re.search(r'\b\d{4,8}\b', corpo_processado)
             if match_codigo:
+                mail.close()
                 mail.logout()
                 return (
                     f"✅ **Código Encontrado!**\n\n"
@@ -191,6 +195,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             # 3. PRIORIDADE 3: Links genéricos de acesso
             match_link_geral = re.search(r'https?://[^\s<>"\'\);]+(?:update-primary-location|confirm|verify|household|auth|code)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
             if match_link_geral:
+                mail.close()
                 mail.logout()
                 link_limpo = match_link_geral.group(0).rstrip('.,;)')
                 return (
@@ -199,6 +204,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
+        mail.close()
         mail.logout()
         return "⚠️ Nenhum e-mail com código ou link recebido nos últimos 15 minutos foi localizado nesta caixa."
 
@@ -206,7 +212,13 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
         return "❌ O servidor de e-mail demorou muito para responder (Timeout). Tente novamente."
     except Exception as e:
         logging.error(f"Erro IMAP: {e}")
-        return "❌ Erro de autenticação IMAP no servidor de destino."
+        return "❌ Erro de conexão com a caixa de e-mail. Tente novamente em instantes."
+    finally:
+        try:
+            if mail:
+                mail.logout()
+        except Exception:
+            pass
 
 # --- Handlers Telegram ---
 
@@ -323,7 +335,6 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
         )
         return
 
-    # Se a conta usar encaminhamento apontando para o Gmail, usa o e-mail mestre para autenticar
     email_login = conta_encontrada.get("email_login", email_base)
 
     dados_completos = {
@@ -345,14 +356,20 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
 def main():
     Thread(target=run_flask, daemon=True).start()
 
-    app = ApplicationBuilder().token(TOKEN_TELEGRAM).build()
+    # Loop Infinito com Auto-Reconexão em caso de desconexão de rede
+    while True:
+        try:
+            app = ApplicationBuilder().token(TOKEN_TELEGRAM).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("autorizar", autorizar_cliente))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receber_mensagem_email))
+            app.add_handler(CommandHandler("start", start))
+            app.add_handler(CommandHandler("autorizar", autorizar_cliente))
+            app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receber_mensagem_email))
 
-    print("🤖 Bot rodando...")
-    app.run_polling()
+            print("🤖 Bot iniciado e rodando com alta estabilidade...")
+            app.run_polling(poll_interval=1.0, timeout=20)
+        except Exception as e:
+            logging.error(f"Ocorreu uma queda temporária no Bot: {e}. Reconectando em 5 segundos...")
+            time.sleep(5)
 
 if __name__ == "__main__":
     main()
