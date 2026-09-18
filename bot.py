@@ -69,7 +69,7 @@ def limpar_e_decodificar_texto(texto: str) -> str:
     texto_limpo = re.sub(r'=\r?\n', '', texto_decodificado)
     return texto_limpo
 
-# --- Leitura IMAP Inteligente (UNSEEN + Regex Precisa) ---
+# --- Leitura IMAP Inteligente e Estável ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -90,7 +90,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
         if status != "OK" or not messages[0]:
             mail.close()
             mail.logout()
-            return "⚠️ Nenhum NOVO e-mail (não lido) recebido nos últimos 15 minutos foi localizado nesta caixa. Solicite o reenvio do código na plataforma."
+            return "⚠️ Nenhum NOVO e-mail (não lido) recebido nos últimos 15 minutos foi localizado nesta caixa. Solicite o reenvio na plataforma."
 
         id_list = messages[0].split()
         ultimos_ids = id_list[-10:]
@@ -138,6 +138,22 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 if email_solicitado not in texto_analise and email_solicitado not in str(msg.get("To", "")).lower():
                     continue
 
+            # --- VERIFICAÇÃO DE SEGURANÇA (VALIDA ANTES DE MARCAR COMO LIDO) ---
+            eh_email_redefinicao = any(termo in texto_analise for termo in [
+                "reset password", "recuperar sua senha", "alterar sua senha", 
+                "alterar o e-mail", "alterar email", "troca de e-mail", 
+                "recuperação de conta", "recuperacaosenha"
+            ])
+
+            if eh_email_redefinicao and not pode_acessar_sensivel:
+                mail.close()
+                mail.logout()
+                return (
+                    "🚫 **Solicitação Não Permitida!**\n\n"
+                    "Este e-mail trata-se de uma alteração de senha ou recuperação de conta.\n"
+                    "O seu usuário não possui permissão VIP para visualizar links de redefinição."
+                )
+
             # 1. PRIORIDADE MÁXIMA: Link da Conta Globo
             match_globo = re.search(r'https?://[^\s<>"\'\);]+globo\.com[^\s<>"\'\);]*(?:recuperacao|senha|login|token)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
             if match_globo:
@@ -150,25 +166,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"🔗 Clique no link abaixo para alterar a senha:\n{link_limpo}\n\n"
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
-
-            # --- VERIFICAÇÃO DE SEGURANÇA PARA CLIENTES ---
-            if not pode_acessar_sensivel:
-                termos_proibidos = [
-                    "reset password", "alterar sua senha", "alterar o e-mail", 
-                    "alterar email", "troca de e-mail", "troca de email", "change email",
-                    "atualize seu e-mail", "recuperação de conta"
-                ]
-
-                for termo in termos_proibidos:
-                    if termo in texto_analise:
-                        mail.store(msg_id, '+FLAGS', '\\Seen')
-                        mail.close()
-                        mail.logout()
-                        return (
-                            "🚫 **Solicitação Não Permitida!**\n\n"
-                            "Este e-mail trata-se de uma alteração de senha ou mudança de e-mail da conta.\n"
-                            "Por motivos de segurança, esses links/códigos não são exibidos para o seu usuário."
-                        )
 
             # 2. PRIORIDADE 2: Outros Links de Redefinição Genéricos
             match_reset_especifico = re.search(r'https?://[^\s<>"\'\);]+(?:recuperacaosenha|reset-password|password-reset)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
@@ -184,10 +181,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 )
 
             # 3. PRIORIDADE 3: Códigos Contextuais (Netflix, Disney+, Globoplay, etc.)
-            # Busca código numérico de 4 a 8 dígitos atrelado a frases chave do e-mail
             match_contexto = re.search(r'(?:confirme com o código|informe este código|código de acesso|código é|código de verificação|seu código)[^\d]{1,60}(\d{4,8})\b', corpo_processado, re.IGNORECASE)
-
-            # Filtros genéricos de fallback (ignorando 0800, anos 19XX/20XX e cores hex)
             match_codigo_6 = re.search(r'\b(?!(?:19|20)\d{2}\b)(?!(?:232323|000000|ffffff)\b)\d{6}\b', corpo_processado)
             match_codigo_4 = re.search(r'\b(?!(?:19|20)\d{2}\b)(?!0800\b)\d{4}\b', corpo_processado)
 
