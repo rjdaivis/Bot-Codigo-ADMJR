@@ -69,7 +69,7 @@ def limpar_e_decodificar_texto(texto: str) -> str:
     texto_limpo = re.sub(r'=\r?\n', '', texto_decodificado)
     return texto_limpo
 
-# --- Leitura IMAP Inteligente (Globo, Disney, Netflix) ---
+# --- Leitura IMAP com Filtro de E-mails Não Lidos (UNSEEN) ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -77,9 +77,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
     porta = dados_conta.get("porta", 993)
     senha = dados_conta.get("senha_imap")
     email_solicitado = dados_conta.get("email_destinatario", "").lower()
-
-    historico_codigos = carregar_json("historico_codigos.json")
-    ultimo_entregue = historico_codigos.get(email_solicitado)
 
     mail = None
     try:
@@ -89,17 +86,16 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
         
         mail.select("INBOX")
 
-        status, messages = mail.search(None, "ALL")
+        # Procura APENAS por e-mails NÃO LIDOS
+        status, messages = mail.search(None, "UNSEEN")
         if status != "OK" or not messages[0]:
             mail.close()
             mail.logout()
-            return "❌ Nenhum e-mail foi encontrado nesta caixa de entrada."
+            return "⚠️ Nenhum NOVO e-mail (não lido) recebido nos últimos 15 minutos foi localizado. Solicite o reenvio do código na plataforma."
 
         id_list = messages[0].split()
         ultimos_ids = id_list[-10:]
         ultimos_ids.reverse()
-
-        encontrou_repetido = False
 
         for msg_id in ultimos_ids:
             _, data = mail.fetch(msg_id, "(RFC822)")
@@ -143,18 +139,13 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 if email_solicitado not in texto_analise and email_solicitado not in str(msg.get("To", "")).lower():
                     continue
 
-            # 1. PRIORIDADE MAXIMA: Link da Conta Globo (Extrai antes dos bloqueios de segurança)
+            # 1. PRIORIDADE MÁXIMA: Link da Conta Globo
             match_globo = re.search(r'https?://[^\s<>"\'\);]+globo\.com[^\s<>"\'\);]*(?:recuperacao|senha|login|token)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
             
             if match_globo:
                 link_limpo = match_globo.group(0).rstrip('.,;)')
-                if ultimo_entregue == link_limpo:
-                    encontrou_repetido = True
-                    continue
-
-                historico_codigos[email_solicitado] = link_limpo
-                salvar_json("historico_codigos.json", historico_codigos)
-
+                # Marca o e-mail como LIDO no servidor para não repetir nas próximas consultas
+                mail.store(msg_id, '+FLAGS', '\\Seen')
                 mail.close()
                 mail.logout()
                 return (
@@ -163,7 +154,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
-            # --- VERIFICAÇÃO DE SEGURANÇA PARA OUTROS SERVIÇOS ---
+            # --- VERIFICAÇÃO DE SEGURANÇA PARA CLIENTES ---
             if not pode_acessar_sensivel:
                 termos_proibidos = [
                     "reset password", "alterar sua senha", "alterar o e-mail", 
@@ -173,6 +164,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
                 for termo in termos_proibidos:
                     if termo in texto_analise:
+                        mail.store(msg_id, '+FLAGS', '\\Seen')
                         mail.close()
                         mail.logout()
                         return (
@@ -181,17 +173,11 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                             "Por motivos de segurança, esses links/códigos não são exibidos para o seu usuário."
                         )
 
-            # 2. PRIORIDADE 2: Outros Links de Redefinição Genericos
+            # 2. PRIORIDADE 2: Outros Links de Redefinição Genéricos
             match_reset_especifico = re.search(r'https?://[^\s<>"\'\);]+(?:recuperacaosenha|reset-password|password-reset)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
             if match_reset_especifico:
                 link_limpo = match_reset_especifico.group(0).rstrip('.,;)')
-                if ultimo_entregue == link_limpo:
-                    encontrou_repetido = True
-                    continue
-
-                historico_codigos[email_solicitado] = link_limpo
-                salvar_json("historico_codigos.json", historico_codigos)
-
+                mail.store(msg_id, '+FLAGS', '\\Seen')
                 mail.close()
                 mail.logout()
                 return (
@@ -220,13 +206,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 codigo_final = match_codigo_4.group(0)
 
             if codigo_final:
-                if ultimo_entregue == codigo_final:
-                    encontrou_repetido = True
-                    continue
-
-                historico_codigos[email_solicitado] = codigo_final
-                salvar_json("historico_codigos.json", historico_codigos)
-
+                mail.store(msg_id, '+FLAGS', '\\Seen')
                 mail.close()
                 mail.logout()
                 return (
@@ -237,15 +217,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
         mail.close()
         mail.logout()
-
-        if encontrou_repetido:
-            return (
-                "🔄 **Código/Link Já Entregue Anteriormente!**\n\n"
-                "O código ou link mais recente localizado nesta caixa já foi enviado a você.\n"
-                "Por favor, acesse a plataforma e **solicite o reenvio de um novo e-mail**."
-            )
-
-        return "⚠️ Nenhum e-mail com novo código ou link recebido nos últimos 15 minutos foi localizado nesta caixa."
+        return "⚠️ Nenhum NOVO e-mail (não lido) recebido nos últimos 15 minutos foi localizado nesta caixa."
 
     except socket.timeout:
         return "❌ O servidor de e-mail demorou muito para responder (Timeout). Tente novamente."
