@@ -69,7 +69,7 @@ def limpar_e_decodificar_texto(texto: str) -> str:
     texto_limpo = re.sub(r'=\r?\n', '', texto_decodificado)
     return texto_limpo
 
-# --- Leitura IMAP Precisa (Disney, Globo, Netflix) ---
+# --- Leitura IMAP Precisa (Netflix, Disney, Globo) ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -181,22 +181,25 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
-            # 2. PRIORIDADE 2: Regra Específica para Disney+ (Procura o PIN perto do texto indicativo)
+            # 2. PRIORIDADE 2: Captura de Códigos por Serviço sem capturar cores CSS
+            match_netflix = re.search(r'(?:informe este código|código para entrar|código de acesso|código é)[^\d]{1,50}(\d{4,8})\b', corpo_processado, re.IGNORECASE)
             match_disney = re.search(r'(?:código de acesso|código é|código de verificação)[^\d]{1,50}(\d{6})\b', corpo_processado, re.IGNORECASE)
             
-            # Código de 6 dígitos genérico (ignora anos 19XX/20XX)
-            match_codigo_6 = re.search(r'\b(?!(?:19|20)\d{2}\b)\d{6}\b', corpo_processado)
-            
-            # Código numérico de 4 a 8 dígitos genérico
-            match_codigo_geral = re.search(r'\b(?!(?:19|20)\d{2}\b)\d{4,8}\b', corpo_processado)
+            # Filtro genérico que ignora anos (19XX/20XX) e cores hex repetidas (232323, etc.)
+            match_codigo_6 = re.search(r'\b(?!(?:19|20)\d{2}\b)(?!(?:232323|000000|ffffff)\b)\d{6}\b', corpo_processado)
+            match_codigo_4 = re.search(r'\b(?!(?:19|20)\d{2}\b)\d{4}\b', corpo_processado)
 
             codigo_final = None
-            if match_disney:
+            if match_netflix:
+                codigo_final = match_netflix.group(1)
+            elif match_disney:
                 codigo_final = match_disney.group(1)
+            elif "netflix" in texto_analise and match_codigo_4:
+                codigo_final = match_codigo_4.group(0)
             elif match_codigo_6:
                 codigo_final = match_codigo_6.group(0)
-            elif match_codigo_geral:
-                codigo_final = match_codigo_geral.group(0)
+            elif match_codigo_4:
+                codigo_final = match_codigo_4.group(0)
 
             if codigo_final:
                 mail.close()
