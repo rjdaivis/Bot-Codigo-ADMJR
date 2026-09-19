@@ -65,11 +65,15 @@ def normalizar_email_gmail(email_str: str) -> str:
 def limpar_e_decodificar_texto(texto: str) -> str:
     if not texto:
         return ""
-    texto_decodificado = html.unescape(texto)
-    texto_limpo = re.sub(r'=\r?\n', '', texto_decodificado)
-    return texto_limpo
+    # Remove tags de estilo CSS e scripts inteiros para evitar capturar hexadecimais ou IDs
+    texto_sem_estilos = re.sub(r'<(style|script)[^>]*>.*?</\1>', '', texto, flags=re.DOTALL | re.IGNORECASE)
+    # Decodifica entidades HTML e limpa tags HTML mantendo apenas o texto puro
+    texto_decodificado = html.unescape(texto_sem_estilos)
+    texto_limpo = re.sub(r'<[^>]+>', ' ', texto_decodificado)
+    texto_limpo = re.sub(r'=\r?\n', '', texto_limpo)
+    return re.sub(r'\s+', ' ', texto_limpo)
 
-# --- Leitura IMAP Inteligente com Filtro de Notificações e Regra UNSEEN ---
+# --- Leitura IMAP Precisa (Disney, Globo, Netflix) ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -138,7 +142,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 if email_solicitado not in texto_analise and email_solicitado not in str(msg.get("To", "")).lower():
                     continue
 
-            # --- FILTRO 1: IGNORAR NOTIFICAÇÕES APENAS INFORMATIVAS (SEM CÓDIGO) ---
+            # --- FILTRO 1: IGNORAR NOTIFICAÇÕES APENAS INFORMATIVAS ---
             if any(termo in assunto for termo in ["novo login", "alerta de segurança", "dispositivo conectado", "new login"]):
                 mail.store(msg_id, '+FLAGS', '\\Seen')
                 continue
@@ -185,15 +189,19 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
-            # 3. PRIORIDADE 3: Extração de Códigos Contextuais (Globo, Disney, Netflix, etc.)
-            match_contexto = re.search(r'(?:código:|código é|código de acesso único|código de acesso|confirme com o código|confirmar sua identidade|código para confirmar|informe este código|código de verificação|seu código)[^\d]{1,100}(\d{4,8})\b', corpo_processado, re.IGNORECASE)
+            # 3. PRIORIDADE 3: Regra Direta para Disney+ (Busca os 6 dígitos após o texto do e-mail)
+            match_disney_estrito = re.search(r'(?:use esse código de acesso|código de acesso único|expira em \d{1,2} minutos)[^\d]{1,100}(\d{6})\b', corpo_processado, re.IGNORECASE)
+
+            # Extração genérica para outros serviços
+            match_contexto = re.search(r'(?:código:|código é|código de acesso|confirme com o código|confirmar sua identidade|código para confirmar|informe este código|código de verificação|seu código)[^\d]{1,100}(\d{4,8})\b', corpo_processado, re.IGNORECASE)
             
-            # Filtro genérico com exclusão estrita de hex de cores CSS (666666, 252526, 707070, 232323, etc.)
             match_codigo_6 = re.search(r'\b(?!(?:19|20)\d{2}\b)(?!(?:666666|252526|707070|232323|000000|ffffff|333333|444444|888888|999999)\b)\d{6}\b', corpo_processado)
             match_codigo_4 = re.search(r'\b(?!(?:19|20)\d{2}\b)(?!0800\b)\d{4}\b', corpo_processado)
 
             codigo_final = None
-            if match_contexto:
+            if match_disney_estrito:
+                codigo_final = match_disney_estrito.group(1)
+            elif match_contexto:
                 codigo_final = match_contexto.group(1)
             elif "código" in texto_analise or "code" in texto_analise:
                 if match_codigo_6:
@@ -308,7 +316,6 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
     if not eh_admin:
         emails_permitidos = dados_cliente.get("emails_permitidos", {})
         
-        # Suporte correto para busca por e-mail exato OU coringa '*'
         tem_acesso = "*" in emails_permitidos or email_original in emails_permitidos
 
         if not dados_cliente or not tem_acesso:
