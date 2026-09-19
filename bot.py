@@ -71,7 +71,7 @@ def limpar_e_decodificar_texto(texto: str) -> str:
     texto_limpo = re.sub(r'=\r?\n', '', texto_limpo)
     return texto_limpo
 
-# --- Leitura IMAP Rápida com Timeout Reduzido ---
+# --- Leitura IMAP Rápida ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -82,7 +82,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
     mail = None
     try:
-        socket.setdefaulttimeout(7)  # Reduzido para evitar bloqueios longos
+        socket.setdefaulttimeout(7)
         mail = imaplib.IMAP4_SSL(host, porta)
         mail.login(email_usuario, senha)
         
@@ -309,7 +309,8 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
     user_id = str(update.effective_user.id)
     email_original = update.message.text.strip().lower()
 
-    if not re.match(r"^[\w\.-]+@[\w\.-]+\.\w+$", email_original):
+    # REGEX ATUALIZADA COM SUPORTE AO CARACTERE '+' (ALIAS GMAIL)
+    if not re.match(r"^[\w\.\+-]+@[\w\.-]+\.\w+$", email_original):
         await update.message.reply_text(
             "⚠️ Por favor, digite um **endereço de e-mail válido**.",
             parse_mode="Markdown"
