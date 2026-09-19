@@ -62,14 +62,29 @@ def normalizar_email_gmail(email_str: str) -> str:
         return f"{usuario}@{dominio}"
     return email_str.strip().lower()
 
-def limpar_e_decodificar_texto(texto: str) -> str:
-    if not texto:
+def tratar_quopri_e_html(payload_bytes: bytes) -> str:
+    if not payload_bytes:
         return ""
-    texto_sem_estilos = re.sub(r'<(style|script)[^>]*>.*?</\1>', '', texto, flags=re.DOTALL | re.IGNORECASE)
-    texto_decodificado = html.unescape(texto_sem_estilos)
-    texto_limpo = re.sub(r'=<br\s*/?>', '', texto_decodificado)
-    texto_limpo = re.sub(r'=\r?\n', '', texto_limpo)
+    try:
+        # Decodifica Quoted-Printable nativamente
+        payload_decodificado = quopri.decodestring(payload_bytes).decode('utf-8', errors='ignore')
+    except Exception:
+        payload_decodificado = payload_bytes.decode('utf-8', errors='ignore')
+
+    # Remove quebras de linha embutidas do quoted-printable (= \r\n)
+    texto_sem_quebras = re.sub(r'=\r?\n', '', payload_decodificado)
+    # Transforma entidades tipo &#x3D; em caracteres normais (=)
+    texto_limpo = html.unescape(texto_sem_quebras)
     return texto_limpo
+
+def limpar_link_url(url: str) -> str:
+    if not url:
+        return ""
+    # Substitui codificações finais e remove caracteres estranhos
+    url_limpa = url.replace("&#x3D;", "=").replace("&amp;", "&")
+    url_limpa = re.sub(r'#x3D;?$', '=', url_limpa, flags=re.IGNORECASE)
+    url_limpa = re.sub(r'=\d+$', '=', url_limpa) # Corrigir caso haja cortes no final
+    return url_limpa.rstrip('.,;)"\'')
 
 # --- Leitura IMAP Inteligente e Precisa ---
 
@@ -118,7 +133,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
             assunto = str(msg.get("Subject", "")).lower()
 
-            corpo = ""
+            corpo_bruto = b""
             if msg.is_multipart():
                 for part in msg.walk():
                     content_type = part.get_content_type()
@@ -127,13 +142,13 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         if content_type in ["text/plain", "text/html"]:
                             payload = part.get_payload(decode=True)
                             if payload:
-                                corpo += payload.decode(errors="ignore") + "\n"
+                                corpo_bruto += payload + b"\n"
             else:
                 payload = msg.get_payload(decode=True)
                 if payload:
-                    corpo = payload.decode(errors="ignore")
+                    corpo_bruto = payload
 
-            corpo_processado = limpar_e_decodificar_texto(corpo)
+            corpo_processado = tratar_quopri_e_html(corpo_bruto)
             texto_analise = (assunto + " " + corpo_processado).lower()
 
             if email_solicitado and email_solicitado not in email_usuario:
@@ -145,15 +160,15 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 mail.store(msg_id, '+FLAGS', '\\Seen')
                 continue
 
-            # 1. PRIORIDADE MÁXIMA: Link da Conta Globo (Suporte a 'recuperacaoSenha' em Maiúsculas)
-            match_globo_link = re.search(r'https?://[^\s<>"\'\);]*globo\.com[^\s<>"\'\);]*(?:recuperacaoSenha|recuperacao|senha|login|token)[^\s<>"\'\);]*', corpo, re.IGNORECASE)
+            # 1. PRIORIDADE MÁXIMA: Link da Conta Globo (Correção de URL Quoted-Printable)
+            match_globo_link = re.search(r'https?://[^\s<>"\'\);]*globo\.com[^\s<>"\'\);]*(?:recuperacaoSenha|recuperacao|senha|login|token)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
             if match_globo_link:
                 if not pode_acessar_sensivel:
                     mail.close()
                     mail.logout()
                     return "🚫 **Solicitação Não Permitida!**\n\nO seu usuário não possui permissão VIP para visualizar links de redefinição de senha."
                 
-                link_limpo = match_globo_link.group(0).rstrip('.,;)')
+                link_limpo = limpar_link_url(match_globo_link.group(0))
                 mail.store(msg_id, '+FLAGS', '\\Seen')
                 mail.close()
                 mail.logout()
@@ -164,9 +179,9 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 )
 
             # 2. PRIORIDADE 2: Links de Atualização de Residência Netflix
-            match_netflix_residencia = re.search(r'https?://[^\s<>"\'\);]+netflix\.com[^\s<>"\'\);]*(?:travel|update-primary-location|verify|household|confirm)[^\s<>"\'\);]*', corpo, re.IGNORECASE)
+            match_netflix_residencia = re.search(r'https?://[^\s<>"\'\);]+netflix\.com[^\s<>"\'\);]*(?:travel|update-primary-location|verify|household|confirm)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
             if match_netflix_residencia:
-                link_limpo = match_netflix_residencia.group(0).rstrip('.,;)')
+                link_limpo = limpar_link_url(match_netflix_residencia.group(0))
                 mail.store(msg_id, '+FLAGS', '\\Seen')
                 mail.close()
                 mail.logout()
@@ -190,7 +205,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             # 3. PRIORIDADE 3: Outros Links de Redefinição Genéricos
             match_reset_especifico = re.search(r'https?://[^\s<>"\'\);]+(?:recuperacaosenha|reset-password|password-reset)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
             if match_reset_especifico and pode_acessar_sensivel:
-                link_limpo = match_reset_especifico.group(0).rstrip('.,;)')
+                link_limpo = limpar_link_url(match_reset_especifico.group(0))
                 mail.store(msg_id, '+FLAGS', '\\Seen')
                 mail.close()
                 mail.logout()
