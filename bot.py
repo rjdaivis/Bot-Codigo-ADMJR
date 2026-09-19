@@ -71,7 +71,7 @@ def limpar_e_decodificar_texto(texto: str) -> str:
     texto_limpo = re.sub(r'=\r?\n', '', texto_limpo)
     return texto_limpo
 
-# --- Leitura IMAP Estável ---
+# --- Leitura IMAP Rápida com Timeout Reduzido ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -82,7 +82,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
     mail = None
     try:
-        socket.setdefaulttimeout(12)
+        socket.setdefaulttimeout(7)  # Reduzido para evitar bloqueios longos
         mail = imaplib.IMAP4_SSL(host, porta)
         mail.login(email_usuario, senha)
         
@@ -233,10 +233,10 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
         return "⚠️ Nenhum NOVO e-mail (não lido) com código de acesso foi localizado nesta caixa nos últimos 15 minutos."
 
     except socket.timeout:
-        return "❌ O servidor de e-mail demorou muito para responder (Timeout). Tente novamente."
+        return "❌ O servidor de e-mail demorou muito para responder (Timeout). Tente novamente em instantes."
     except Exception as e:
         logging.error(f"Erro IMAP: {e}")
-        return "❌ Erro de conexão com a caixa de e-mail. Tente novamente em instantes."
+        return "❌ Erro de conexão com a caixa de e-mail. Verifique as credenciais no contas.json."
     finally:
         try:
             if mail:
@@ -374,7 +374,13 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
     )
 
     loop = asyncio.get_running_loop()
-    resultado = await loop.run_in_executor(None, extrair_codigo_imap_wrapper, dados_completos, pode_acessar_sensivel)
+    try:
+        resultado = await asyncio.wait_for(
+            loop.run_in_executor(None, extrair_codigo_imap_wrapper, dados_completos, pode_acessar_sensivel),
+            timeout=12.0
+        )
+    except asyncio.TimeoutError:
+        resultado = "❌ O servidor de e-mail demorou muito a responder. Tente consultar novamente em instantes."
 
     await msg_carregando.edit_text(resultado, parse_mode="Markdown")
 
