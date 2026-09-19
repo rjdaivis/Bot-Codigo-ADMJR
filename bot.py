@@ -65,15 +65,13 @@ def normalizar_email_gmail(email_str: str) -> str:
 def limpar_e_decodificar_texto(texto: str) -> str:
     if not texto:
         return ""
-    # Remove tags de estilo CSS e scripts inteiros para evitar capturar hexadecimais ou IDs
     texto_sem_estilos = re.sub(r'<(style|script)[^>]*>.*?</\1>', '', texto, flags=re.DOTALL | re.IGNORECASE)
-    # Decodifica entidades HTML e limpa tags HTML mantendo apenas o texto puro
     texto_decodificado = html.unescape(texto_sem_estilos)
-    texto_limpo = re.sub(r'<[^>]+>', ' ', texto_decodificado)
+    texto_limpo = re.sub(r'=<br\s*/?>', '', texto_decodificado)
     texto_limpo = re.sub(r'=\r?\n', '', texto_limpo)
-    return re.sub(r'\s+', ' ', texto_limpo)
+    return texto_limpo
 
-# --- Leitura IMAP Precisa (Disney, Globo, Netflix) ---
+# --- Leitura IMAP Inteligente com Suporte a Residência Netflix ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -147,25 +145,27 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 mail.store(msg_id, '+FLAGS', '\\Seen')
                 continue
 
-            # --- FILTRO 2: VERIFICAÇÃO DE SEGURANÇA PARA CLIENTES ---
-            eh_email_redefinicao = any(termo in texto_analise for termo in [
-                "reset password", "recuperar sua senha", "alterar sua senha", 
-                "alterar o e-mail", "alterar email", "troca de e-mail", 
-                "recuperação de conta", "recuperacaosenha"
-            ])
-
-            if eh_email_redefinicao and not pode_acessar_sensivel:
+            # 1. PRIORIDADE MÁXIMA: Links de Atualização de Residência / Acesso Netflix
+            match_netflix_residencia = re.search(r'https?://[^\s<>"\'\);]+netflix\.com[^\s<>"\'\);]*(?:travel|update-primary-location|verify|household|confirm)[^\s<>"\'\);]*', corpo, re.IGNORECASE)
+            if match_netflix_residencia:
+                link_limpo = match_netflix_residencia.group(0).rstrip('.,;)')
+                mail.store(msg_id, '+FLAGS', '\\Seen')
                 mail.close()
                 mail.logout()
                 return (
-                    "🚫 **Solicitação Não Permitida!**\n\n"
-                    "Este e-mail trata-se de uma alteração de senha ou recuperação de conta.\n"
-                    "O seu usuário não possui permissão VIP para visualizar links de redefinição."
+                    f"✅ **Link de Atualização Netflix Encontrado!**\n\n"
+                    f"🔗 Clique no link abaixo para confirmar a sua residência:\n{link_limpo}\n\n"
+                    f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
-            # 1. PRIORIDADE MÁXIMA: Link de Redefinição Direta da Conta Globo
+            # 2. PRIORIDADE 2: Link de Redefinição Direta da Conta Globo
             match_globo_link = re.search(r'https?://[^\s<>"\'\);]+globo\.com[^\s<>"\'\);]*(?:recuperacao|senha|login|token)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
             if match_globo_link:
+                if not pode_acessar_sensivel:
+                    mail.close()
+                    mail.logout()
+                    return "🚫 **Solicitação Não Permitida!**\n\nO seu usuário não possui permissão VIP para visualizar links de redefinição de senha."
+                
                 link_limpo = match_globo_link.group(0).rstrip('.,;)')
                 mail.store(msg_id, '+FLAGS', '\\Seen')
                 mail.close()
@@ -176,9 +176,20 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
-            # 2. PRIORIDADE 2: Outros Links de Redefinição Genéricos
+            # --- VERIFICAÇÃO DE SEGURANÇA PARA OUTRAS REDEFINIÇÕES ---
+            eh_email_redefinicao = any(termo in assunto for termo in ["redefinir sua senha", "reset password", "recuperar sua senha"])
+            if eh_email_redefinicao and not pode_acessar_sensivel:
+                mail.close()
+                mail.logout()
+                return (
+                    "🚫 **Solicitação Não Permitida!**\n\n"
+                    "Este e-mail trata-se de uma alteração de senha ou recuperação de conta.\n"
+                    "O seu usuário não possui permissão VIP para visualizar links de redefinição."
+                )
+
+            # 3. PRIORIDADE 3: Outros Links de Redefinição Genéricos
             match_reset_especifico = re.search(r'https?://[^\s<>"\'\);]+(?:recuperacaosenha|reset-password|password-reset)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
-            if match_reset_especifico:
+            if match_reset_especifico and pode_acessar_sensivel:
                 link_limpo = match_reset_especifico.group(0).rstrip('.,;)')
                 mail.store(msg_id, '+FLAGS', '\\Seen')
                 mail.close()
@@ -189,10 +200,8 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
-            # 3. PRIORIDADE 3: Regra Direta para Disney+ (Busca os 6 dígitos após o texto do e-mail)
+            # 4. PRIORIDADE 4: Códigos de Verificação (Disney, Netflix PIN, Globo PIN)
             match_disney_estrito = re.search(r'(?:use esse código de acesso|código de acesso único|expira em \d{1,2} minutos)[^\d]{1,100}(\d{6})\b', corpo_processado, re.IGNORECASE)
-
-            # Extração genérica para outros serviços
             match_contexto = re.search(r'(?:código:|código é|código de acesso|confirme com o código|confirmar sua identidade|código para confirmar|informe este código|código de verificação|seu código)[^\d]{1,100}(\d{4,8})\b', corpo_processado, re.IGNORECASE)
             
             match_codigo_6 = re.search(r'\b(?!(?:19|20)\d{2}\b)(?!(?:666666|252526|707070|232323|000000|ffffff|333333|444444|888888|999999)\b)\d{6}\b', corpo_processado)
