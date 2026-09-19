@@ -69,7 +69,7 @@ def limpar_e_decodificar_texto(texto: str) -> str:
     texto_limpo = re.sub(r'=\r?\n', '', texto_decodificado)
     return texto_limpo
 
-# --- Leitura IMAP Inteligente e Estável ---
+# --- Leitura IMAP Inteligente e Precisa ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -138,7 +138,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 if email_solicitado not in texto_analise and email_solicitado not in str(msg.get("To", "")).lower():
                     continue
 
-            # --- VERIFICAÇÃO DE SEGURANÇA (VALIDA ANTES DE MARCAR COMO LIDO) ---
+            # --- VERIFICAÇÃO DE SEGURANÇA PARA CLIENTES ---
             eh_email_redefinicao = any(termo in texto_analise for termo in [
                 "reset password", "recuperar sua senha", "alterar sua senha", 
                 "alterar o e-mail", "alterar email", "troca de e-mail", 
@@ -180,9 +180,11 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
-            # 3. PRIORIDADE 3: Códigos Contextuais (Netflix, Disney+, Globoplay, etc.)
-            match_contexto = re.search(r'(?:confirme com o código|informe este código|código de acesso|código é|código de verificação|seu código)[^\d]{1,60}(\d{4,8})\b', corpo_processado, re.IGNORECASE)
-            match_codigo_6 = re.search(r'\b(?!(?:19|20)\d{2}\b)(?!(?:232323|000000|ffffff)\b)\d{6}\b', corpo_processado)
+            # 3. PRIORIDADE 3: Códigos de Verificação por Contexto (Disney, Netflix, etc.)
+            match_contexto = re.search(r'(?:código de acesso único|confirme com o código|informe este código|código de acesso|código é|código de verificação|seu código)[^\d]{1,100}(\d{4,8})\b', corpo_processado, re.IGNORECASE)
+            
+            # Filtro genérico excluindo cores CSS hex comuns (707070, 232323, 000000, ffffff, etc.)
+            match_codigo_6 = re.search(r'\b(?!(?:19|20)\d{2}\b)(?!(?:707070|232323|000000|ffffff|333333)\b)\d{6}\b', corpo_processado)
             match_codigo_4 = re.search(r'\b(?!(?:19|20)\d{2}\b)(?!0800\b)\d{4}\b', corpo_processado)
 
             codigo_final = None
