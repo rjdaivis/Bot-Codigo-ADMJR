@@ -71,7 +71,7 @@ def limpar_e_decodificar_texto(texto: str) -> str:
     texto_limpo = re.sub(r'=\r?\n', '', texto_limpo)
     return texto_limpo
 
-# --- Leitura IMAP Inteligente com Suporte a Residência Netflix ---
+# --- Leitura IMAP Estável ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -145,7 +145,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 mail.store(msg_id, '+FLAGS', '\\Seen')
                 continue
 
-            # 1. PRIORIDADE MÁXIMA: Links de Atualização de Residência / Acesso Netflix
+            # 1. PRIORIDADE MÁXIMA: Links de Atualização de Residência Netflix
             match_netflix_residencia = re.search(r'https?://[^\s<>"\'\);]+netflix\.com[^\s<>"\'\);]*(?:travel|update-primary-location|verify|household|confirm)[^\s<>"\'\);]*', corpo, re.IGNORECASE)
             if match_netflix_residencia:
                 link_limpo = match_netflix_residencia.group(0).rstrip('.,;)')
@@ -200,7 +200,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
-            # 4. PRIORIDADE 4: Códigos de Verificação (Disney, Netflix PIN, Globo PIN)
+            # 4. PRIORIDADE 4: Extração de CÓDIGOS (Disney, Netflix, Globo)
             match_disney_estrito = re.search(r'(?:use esse código de acesso|código de acesso único|expira em \d{1,2} minutos)[^\d]{1,100}(\d{6})\b', corpo_processado, re.IGNORECASE)
             match_contexto = re.search(r'(?:código:|código é|código de acesso|confirme com o código|confirmar sua identidade|código para confirmar|informe este código|código de verificação|seu código)[^\d]{1,100}(\d{4,8})\b', corpo_processado, re.IGNORECASE)
             
