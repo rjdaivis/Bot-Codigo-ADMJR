@@ -69,7 +69,7 @@ def limpar_e_decodificar_texto(texto: str) -> str:
     texto_limpo = re.sub(r'=\r?\n', '', texto_decodificado)
     return texto_limpo
 
-# --- Leitura IMAP Inteligente e Precisa ---
+# --- Leitura IMAP Inteligente com Filtro de Notificações ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -138,7 +138,12 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 if email_solicitado not in texto_analise and email_solicitado not in str(msg.get("To", "")).lower():
                     continue
 
-            # --- VERIFICAÇÃO DE SEGURANÇA PARA CLIENTES ---
+            # --- FILTRO 1: IGNORAR NOTIFICAÇÕES APENAS INFORMATIVAS (SEM CÓDIGO) ---
+            if any(termo in assunto for termo in ["novo login", "alerta de segurança", "dispositivo conectado", "new login"]):
+                mail.store(msg_id, '+FLAGS', '\\Seen')
+                continue
+
+            # --- FILTRO 2: VERIFICAÇÃO DE SEGURANÇA PARA CLIENTES ---
             eh_email_redefinicao = any(termo in texto_analise for termo in [
                 "reset password", "recuperar sua senha", "alterar sua senha", 
                 "alterar o e-mail", "alterar email", "troca de e-mail", 
@@ -180,20 +185,21 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
-            # 3. PRIORIDADE 3: Códigos de Verificação por Contexto (Disney, Netflix, etc.)
-            match_contexto = re.search(r'(?:código de acesso único|confirme com o código|informe este código|código de acesso|código é|código de verificação|seu código)[^\d]{1,100}(\d{4,8})\b', corpo_processado, re.IGNORECASE)
+            # 3. PRIORIDADE 3: Extração por Contexto Específico de Códigos
+            match_contexto = re.search(r'(?:código de acesso único|código de acesso|confirme com o código|informe este código|código é|código de verificação|seu código)[^\d]{1,100}(\d{4,8})\b', corpo_processado, re.IGNORECASE)
             
-            # Filtro genérico excluindo cores CSS hex comuns (707070, 232323, 000000, ffffff, etc.)
-            match_codigo_6 = re.search(r'\b(?!(?:19|20)\d{2}\b)(?!(?:707070|232323|000000|ffffff|333333)\b)\d{6}\b', corpo_processado)
+            # Filtro genérico com exclusão estrita de hex de cores CSS (252526, 707070, 232323, etc.)
+            match_codigo_6 = re.search(r'\b(?!(?:19|20)\d{2}\b)(?!(?:252526|707070|232323|000000|ffffff|333333)\b)\d{6}\b', corpo_processado)
             match_codigo_4 = re.search(r'\b(?!(?:19|20)\d{2}\b)(?!0800\b)\d{4}\b', corpo_processado)
 
             codigo_final = None
             if match_contexto:
                 codigo_final = match_contexto.group(1)
-            elif match_codigo_6:
-                codigo_final = match_codigo_6.group(0)
-            elif match_codigo_4:
-                codigo_final = match_codigo_4.group(0)
+            elif "código" in texto_analise or "code" in texto_analise:
+                if match_codigo_6:
+                    codigo_final = match_codigo_6.group(0)
+                elif match_codigo_4:
+                    codigo_final = match_codigo_4.group(0)
 
             if codigo_final:
                 mail.store(msg_id, '+FLAGS', '\\Seen')
@@ -207,7 +213,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
         mail.close()
         mail.logout()
-        return "⚠️ Nenhum NOVO e-mail (não lido) recebido nos últimos 15 minutos foi localizado nesta caixa."
+        return "⚠️ Nenhum NOVO e-mail (não lido) com código de acesso foi localizado nesta caixa nos últimos 15 minutos."
 
     except socket.timeout:
         return "❌ O servidor de e-mail demorou muito para responder (Timeout). Tente novamente."
