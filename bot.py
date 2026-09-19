@@ -69,7 +69,7 @@ def limpar_e_decodificar_texto(texto: str) -> str:
     texto_limpo = re.sub(r'=\r?\n', '', texto_decodificado)
     return texto_limpo
 
-# --- Leitura IMAP Inteligente com Filtro de Notificações ---
+# --- Leitura IMAP Inteligente com Filtro de Notificações e Regra UNSEEN ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -159,10 +159,10 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     "O seu usuário não possui permissão VIP para visualizar links de redefinição."
                 )
 
-            # 1. PRIORIDADE MÁXIMA: Link da Conta Globo
-            match_globo = re.search(r'https?://[^\s<>"\'\);]+globo\.com[^\s<>"\'\);]*(?:recuperacao|senha|login|token)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
-            if match_globo:
-                link_limpo = match_globo.group(0).rstrip('.,;)')
+            # 1. PRIORIDADE MÁXIMA: Link de Redefinição Direta da Conta Globo
+            match_globo_link = re.search(r'https?://[^\s<>"\'\);]+globo\.com[^\s<>"\'\);]*(?:recuperacao|senha|login|token)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
+            if match_globo_link:
+                link_limpo = match_globo_link.group(0).rstrip('.,;)')
                 mail.store(msg_id, '+FLAGS', '\\Seen')
                 mail.close()
                 mail.logout()
@@ -185,11 +185,11 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
-            # 3. PRIORIDADE 3: Extração por Contexto Específico de Códigos
-            match_contexto = re.search(r'(?:código de acesso único|código de acesso|confirme com o código|informe este código|código é|código de verificação|seu código)[^\d]{1,100}(\d{4,8})\b', corpo_processado, re.IGNORECASE)
+            # 3. PRIORIDADE 3: Extração de Códigos Contextuais (Globo, Disney, Netflix, etc.)
+            match_contexto = re.search(r'(?:código:|código é|código de acesso único|código de acesso|confirme com o código|confirmar sua identidade|código para confirmar|informe este código|código de verificação|seu código)[^\d]{1,100}(\d{4,8})\b', corpo_processado, re.IGNORECASE)
             
-            # Filtro genérico com exclusão estrita de hex de cores CSS (252526, 707070, 232323, etc.)
-            match_codigo_6 = re.search(r'\b(?!(?:19|20)\d{2}\b)(?!(?:252526|707070|232323|000000|ffffff|333333)\b)\d{6}\b', corpo_processado)
+            # Filtro genérico com exclusão estrita de hex de cores CSS (666666, 252526, 707070, 232323, etc.)
+            match_codigo_6 = re.search(r'\b(?!(?:19|20)\d{2}\b)(?!(?:666666|252526|707070|232323|000000|ffffff|333333|444444|888888|999999)\b)\d{6}\b', corpo_processado)
             match_codigo_4 = re.search(r'\b(?!(?:19|20)\d{2}\b)(?!0800\b)\d{4}\b', corpo_processado)
 
             codigo_final = None
@@ -307,6 +307,8 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
 
     if not eh_admin:
         emails_permitidos = dados_cliente.get("emails_permitidos", {})
+        
+        # Suporte correto para busca por e-mail exato OU coringa '*'
         tem_acesso = "*" in emails_permitidos or email_original in emails_permitidos
 
         if not dados_cliente or not tem_acesso:
