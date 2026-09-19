@@ -71,7 +71,7 @@ def limpar_e_decodificar_texto(texto: str) -> str:
     texto_limpo = re.sub(r'=\r?\n', '', texto_limpo)
     return texto_limpo
 
-# --- Leitura IMAP Rápida ---
+# --- Leitura IMAP Inteligente e Precisa ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -145,21 +145,8 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 mail.store(msg_id, '+FLAGS', '\\Seen')
                 continue
 
-            # 1. PRIORIDADE MÁXIMA: Links de Atualização de Residência Netflix
-            match_netflix_residencia = re.search(r'https?://[^\s<>"\'\);]+netflix\.com[^\s<>"\'\);]*(?:travel|update-primary-location|verify|household|confirm)[^\s<>"\'\);]*', corpo, re.IGNORECASE)
-            if match_netflix_residencia:
-                link_limpo = match_netflix_residencia.group(0).rstrip('.,;)')
-                mail.store(msg_id, '+FLAGS', '\\Seen')
-                mail.close()
-                mail.logout()
-                return (
-                    f"✅ **Link de Atualização Netflix Encontrado!**\n\n"
-                    f"🔗 Clique no link abaixo para confirmar a sua residência:\n{link_limpo}\n\n"
-                    f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
-                )
-
-            # 2. PRIORIDADE 2: Link de Redefinição Direta da Conta Globo
-            match_globo_link = re.search(r'https?://[^\s<>"\'\);]+globo\.com[^\s<>"\'\);]*(?:recuperacao|senha|login|token)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
+            # 1. PRIORIDADE MÁXIMA: Link da Conta Globo (Suporte a 'recuperacaoSenha' em Maiúsculas)
+            match_globo_link = re.search(r'https?://[^\s<>"\'\);]*globo\.com[^\s<>"\'\);]*(?:recuperacaoSenha|recuperacao|senha|login|token)[^\s<>"\'\);]*', corpo, re.IGNORECASE)
             if match_globo_link:
                 if not pode_acessar_sensivel:
                     mail.close()
@@ -173,6 +160,19 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 return (
                     f"✅ **Link de Redefinição Globo Encontrado!**\n\n"
                     f"🔗 Clique no link abaixo para alterar a senha:\n{link_limpo}\n\n"
+                    f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
+                )
+
+            # 2. PRIORIDADE 2: Links de Atualização de Residência Netflix
+            match_netflix_residencia = re.search(r'https?://[^\s<>"\'\);]+netflix\.com[^\s<>"\'\);]*(?:travel|update-primary-location|verify|household|confirm)[^\s<>"\'\);]*', corpo, re.IGNORECASE)
+            if match_netflix_residencia:
+                link_limpo = match_netflix_residencia.group(0).rstrip('.,;)')
+                mail.store(msg_id, '+FLAGS', '\\Seen')
+                mail.close()
+                mail.logout()
+                return (
+                    f"✅ **Link de Atualização Netflix Encontrado!**\n\n"
+                    f"🔗 Clique no link abaixo para confirmar a sua residência:\n{link_limpo}\n\n"
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
@@ -309,7 +309,6 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
     user_id = str(update.effective_user.id)
     email_original = update.message.text.strip().lower()
 
-    # REGEX ATUALIZADA COM SUPORTE AO CARACTERE '+' (ALIAS GMAIL)
     if not re.match(r"^[\w\.\+-]+@[\w\.-]+\.\w+$", email_original):
         await update.message.reply_text(
             "⚠️ Por favor, digite um **endereço de e-mail válido**.",
