@@ -19,7 +19,6 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-# Carrega o token das Variáveis de Ambiente do Render para maior segurança
 TOKEN_TELEGRAM = os.environ.get("TOKEN_TELEGRAM", "SEU_TOKEN_AQUI")
 ADMIN_ID = 7496198484  # Substitua pelo seu ID numérico do Telegram
 
@@ -157,7 +156,20 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 mail.store(msg_id, '+FLAGS', '\\Seen')
                 continue
 
-            # 1. PRIORIDADE 1: Link HBO Max / Max
+            # 1. PRIORIDADE MÁXIMA: Links de Atualização / Código Temporário Netflix (Botão 'Receber código')
+            match_netflix_residencia = re.search(r'https?://[^\s<>"\'\);]+netflix\.com[^\s<>"\'\);]*(?:travel|update-primary-location|verify|household|confirm|code)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
+            if match_netflix_residencia:
+                link_limpo = limpar_link_url(match_netflix_residencia.group(0))
+                mail.store(msg_id, '+FLAGS', '\\Seen')
+                mail.close()
+                mail.logout()
+                return (
+                    f"✅ **Link de Acesso Netflix Encontrado!**\n\n"
+                    f"🔗 Clique no link abaixo para obter o código/confirmar a residência:\n{link_limpo}\n\n"
+                    f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
+                )
+
+            # 2. PRIORIDADE 2: Link HBO Max / Max
             match_hbo_link = re.search(r'https?://[^\s<>"\'\);]*(?:hbomax\.com|max\.com)[^\s<>"\'\);]*(?:reset-password|password|token|reset|recover|alteracao)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
             if match_hbo_link:
                 if not pode_acessar_sensivel:
@@ -175,7 +187,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
-            # 2. PRIORIDADE 2: Link Paramount+
+            # 3. PRIORIDADE 3: Link Paramount+
             match_paramount_link = re.search(r'https?://[^\s<>"\'\);]*paramountplus\.com[^\s<>"\'\);]*(?:reset-password|password|token|reset)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
             if match_paramount_link:
                 if not pode_acessar_sensivel:
@@ -193,7 +205,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
-            # 3. PRIORIDADE 3: Link Conta Globo
+            # 4. PRIORIDADE 4: Link Conta Globo
             match_globo_link = re.search(r'https?://[^\s<>"\'\);]*globo\.com[^\s<>"\'\);]*(?:recuperacaoSenha|recuperacao|senha|login|token)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
             if match_globo_link:
                 if not pode_acessar_sensivel:
@@ -211,21 +223,8 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
-            # 4. PRIORIDADE 4: Links de Atualização de Residência Netflix
-            match_netflix_residencia = re.search(r'https?://[^\s<>"\'\);]+netflix\.com[^\s<>"\'\);]*(?:travel|update-primary-location|verify|household|confirm)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
-            if match_netflix_residencia:
-                link_limpo = limpar_link_url(match_netflix_residencia.group(0))
-                mail.store(msg_id, '+FLAGS', '\\Seen')
-                mail.close()
-                mail.logout()
-                return (
-                    f"✅ **Link de Atualização Netflix Encontrado!**\n\n"
-                    f"🔗 Clique no link abaixo para confirmar a sua residência:\n{link_limpo}\n\n"
-                    f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
-                )
-
             # --- VERIFICAÇÃO DE SEGURANÇA PARA OUTRAS REDEFINIÇÕES ---
-            eh_email_redefinicao = any(termo in assunto for termo in ["redefinir sua senha", "reset password", "recuperar sua senha", "senha da conta", "alteração de senha"])
+            eh_email_redefinicao = any(termo in assunto for termo in ["redefinir sua senha", "reset password", "recuperar sua senha", "alteração de senha"])
             if eh_email_redefinicao and not pode_acessar_sensivel:
                 mail.close()
                 mail.logout()
@@ -248,7 +247,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
-            # 6. PRIORIDADE 6: Extração de CÓDIGOS (Disney, Netflix, Globo)
+            # 6. PRIORIDADE 6: Extração de CÓDIGOS (Disney, Netflix PIN, Globo PIN)
             match_disney_estrito = re.search(r'(?:use esse código de acesso|código de acesso único|expira em \d{1,2} minutos)[^\d]{1,100}(\d{6})\b', corpo_processado, re.IGNORECASE)
             match_contexto = re.search(r'(?:código:|código é|código de acesso|confirme com o código|confirmar sua identidade|código para confirmar|informe este código|código de verificação|seu código)[^\d]{1,100}(\d{4,8})\b', corpo_processado, re.IGNORECASE)
             
