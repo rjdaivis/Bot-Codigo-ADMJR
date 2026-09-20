@@ -82,7 +82,7 @@ def limpar_link_url(url: str) -> str:
     url_limpa = re.sub(r'=\d+$', '=', url_limpa)
     return url_limpa.rstrip('.,;)"\'')
 
-# --- Leitura IMAP Inteligente com Suporte ao Paramount+ ---
+# --- Leitura IMAP Inteligente com Suporte a Todos os Serviços ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -286,10 +286,23 @@ from telegram.ext import (
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
+    clientes = carregar_json("clientes.json")
+
+    # REGISTRO AUTOMÁTICO NO PRIMEIRA VISITA VIA /START
+    if user_id not in clientes and user_id != str(ADMIN_ID):
+        clientes[user_id] = {
+            "emails_permitidos": {},
+            "permitir_sensivel": False
+        }
+        salvar_json("clientes.json", clientes)
+
     await update.message.reply_text(
         f"👋 **Central de Liberação de Códigos**\n\n"
-        f"Seu ID do Telegram: `{user_id}`\n\n"
-        f"Envie o **e-mail do seu login** para buscar o código/link recebido nos últimos 15 minutos.",
+        f"🆔 **Seu ID do Telegram:** `{user_id}`\n\n"
+        f"📍 **Se for o seu primeiro acesso:**\n"
+        f"Envie o seu ID (`{user_id}`) ao **Suporte ADM JR** para liberar a sua assinatura no sistema.\n\n"
+        f"✉️ **Já possui assinatura ativa?**\n"
+        f"Basta digitar o **e-mail do seu login** abaixo para buscar o código/link recebido nos últimos 15 minutos.",
         parse_mode="Markdown"
     )
 
@@ -336,8 +349,33 @@ async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
-    email_original = update.message.text.strip().lower()
+    texto_recebido = update.message.text.strip()
+    email_original = texto_recebido.lower()
 
+    clientes = carregar_json("clientes.json")
+    eh_admin = (user_id == str(ADMIN_ID))
+
+    # RECONHECIMENTO DE PRIMEIRO ACESSO DE CLIENTE NÃO AUTORIZADO
+    dados_cliente = clientes.get(user_id, {})
+    if not eh_admin and (not dados_cliente or not dados_cliente.get("emails_permitidos")):
+        # Auto-cadastra no clientes.json se ainda não existir
+        if user_id not in clientes:
+            clientes[user_id] = {
+                "emails_permitidos": {},
+                "permitir_sensivel": False
+            }
+            salvar_json("clientes.json", clientes)
+
+        await update.message.reply_text(
+            f"🔒 **Acesso Não Liberado!**\n\n"
+            f"Identificamos que você ainda não possui uma assinatura ativa no bot.\n\n"
+            f"👤 **Seu ID de Usuário:** `{user_id}`\n\n"
+            f"👉 Encaminhe o seu ID acima ao **Suporte ADM JR** para realizar o seu cadastro e solicitar a liberação do sistema.",
+            parse_mode="Markdown"
+        )
+        return
+
+    # VALIDAÇÃO DE FORMATO DE E-MAIL
     if not re.match(r"^[\w\.\+-]+@[\w\.-]+\.\w+$", email_original):
         await update.message.reply_text(
             "⚠️ Por favor, digite um **endereço de e-mail válido**.",
@@ -345,10 +383,6 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
         )
         return
 
-    clientes = carregar_json("clientes.json")
-    dados_cliente = clientes.get(user_id, {})
-    eh_admin = (user_id == str(ADMIN_ID))
-    
     pode_acessar_sensivel = eh_admin or dados_cliente.get("permitir_sensivel", False)
 
     if not eh_admin:
@@ -356,9 +390,10 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
         
         tem_acesso = "*" in emails_permitidos or email_original in emails_permitidos
 
-        if not dados_cliente or not tem_acesso:
+        if not tem_acesso:
             await update.message.reply_text(
-                f"❌ Você não tem autorização para acessar os códigos do e-mail `{email_original}`.",
+                f"❌ Você não tem autorização para acessar os códigos do e-mail `{email_original}`.\n\n"
+                f"Solicite a liberação deste e-mail para o seu ID: `{user_id}` junto ao Suporte.",
                 parse_mode="Markdown"
             )
             return
@@ -368,7 +403,7 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
 
         if datetime.now().date() > data_expiracao:
             await update.message.reply_text(
-                f"⚠️ **Assinatura Expirada!** Venceu em **{data_expiracao_str}**.",
+                f"⚠️ **Assinatura Expirada!** Venceu em **{data_expiracao_str}**.\nEntre em contato com o Suporte para renovar.",
                 parse_mode="Markdown"
             )
             return
