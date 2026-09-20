@@ -19,7 +19,8 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-TOKEN_TELEGRAM = "8621009761:AAF3vIBd5--2FDxSJsDCJSpGYcfSf64tpjc"
+# Carrega o token das Variáveis de Ambiente do Render para maior segurança
+TOKEN_TELEGRAM = os.environ.get("TOKEN_TELEGRAM", "SEU_TOKEN_AQUI")
 ADMIN_ID = 7496198484  # Substitua pelo seu ID numérico do Telegram
 
 app_flask = Flask('')
@@ -82,7 +83,7 @@ def limpar_link_url(url: str) -> str:
     url_limpa = re.sub(r'=\d+$', '=', url_limpa)
     return url_limpa.rstrip('.,;)"\'')
 
-# --- Leitura IMAP Inteligente com Suporte a Todos os Serviços ---
+# --- Leitura IMAP Inteligente e Precisa ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -156,7 +157,25 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 mail.store(msg_id, '+FLAGS', '\\Seen')
                 continue
 
-            # 1. PRIORIDADE MÁXIMA: Link de Redefinição Paramount+
+            # 1. PRIORIDADE 1: Link HBO Max / Max
+            match_hbo_link = re.search(r'https?://[^\s<>"\'\);]*(?:hbomax\.com|max\.com)[^\s<>"\'\);]*(?:reset-password|password|token|reset|recover|alteracao)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
+            if match_hbo_link:
+                if not pode_acessar_sensivel:
+                    mail.close()
+                    mail.logout()
+                    return "🚫 **Solicitação Não Permitida!**\n\nO seu usuário não possui permissão VIP para visualizar links de redefinição de senha."
+                
+                link_limpo = limpar_link_url(match_hbo_link.group(0))
+                mail.store(msg_id, '+FLAGS', '\\Seen')
+                mail.close()
+                mail.logout()
+                return (
+                    f"✅ **Link de Redefinição HBO Max Encontrado!**\n\n"
+                    f"🔗 Clique no link abaixo para alterar a senha:\n{link_limpo}\n\n"
+                    f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
+                )
+
+            # 2. PRIORIDADE 2: Link Paramount+
             match_paramount_link = re.search(r'https?://[^\s<>"\'\);]*paramountplus\.com[^\s<>"\'\);]*(?:reset-password|password|token|reset)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
             if match_paramount_link:
                 if not pode_acessar_sensivel:
@@ -174,7 +193,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
-            # 2. PRIORIDADE 2: Link da Conta Globo
+            # 3. PRIORIDADE 3: Link Conta Globo
             match_globo_link = re.search(r'https?://[^\s<>"\'\);]*globo\.com[^\s<>"\'\);]*(?:recuperacaoSenha|recuperacao|senha|login|token)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
             if match_globo_link:
                 if not pode_acessar_sensivel:
@@ -192,7 +211,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
-            # 3. PRIORIDADE 3: Links de Atualização de Residência Netflix
+            # 4. PRIORIDADE 4: Links de Atualização de Residência Netflix
             match_netflix_residencia = re.search(r'https?://[^\s<>"\'\);]+netflix\.com[^\s<>"\'\);]*(?:travel|update-primary-location|verify|household|confirm)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
             if match_netflix_residencia:
                 link_limpo = limpar_link_url(match_netflix_residencia.group(0))
@@ -206,7 +225,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 )
 
             # --- VERIFICAÇÃO DE SEGURANÇA PARA OUTRAS REDEFINIÇÕES ---
-            eh_email_redefinicao = any(termo in assunto for termo in ["redefinir sua senha", "reset password", "recuperar sua senha", "senha da conta"])
+            eh_email_redefinicao = any(termo in assunto for termo in ["redefinir sua senha", "reset password", "recuperar sua senha", "senha da conta", "alteração de senha"])
             if eh_email_redefinicao and not pode_acessar_sensivel:
                 mail.close()
                 mail.logout()
@@ -216,7 +235,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     "O seu usuário não possui permissão VIP para visualizar links de redefinição."
                 )
 
-            # 4. PRIORIDADE 4: Outros Links de Redefinição Genéricos
+            # 5. PRIORIDADE 5: Outros Links de Redefinição Genéricos
             match_reset_especifico = re.search(r'https?://[^\s<>"\'\);]+(?:recuperacaosenha|reset-password|password-reset)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
             if match_reset_especifico and pode_acessar_sensivel:
                 link_limpo = limpar_link_url(match_reset_especifico.group(0))
@@ -229,7 +248,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
-            # 5. PRIORIDADE 5: Extração de CÓDIGOS (Disney, Netflix, Globo)
+            # 6. PRIORIDADE 6: Extração de CÓDIGOS (Disney, Netflix, Globo)
             match_disney_estrito = re.search(r'(?:use esse código de acesso|código de acesso único|expira em \d{1,2} minutos)[^\d]{1,100}(\d{6})\b', corpo_processado, re.IGNORECASE)
             match_contexto = re.search(r'(?:código:|código é|código de acesso|confirme com o código|confirmar sua identidade|código para confirmar|informe este código|código de verificação|seu código)[^\d]{1,100}(\d{4,8})\b', corpo_processado, re.IGNORECASE)
             
@@ -288,7 +307,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     clientes = carregar_json("clientes.json")
 
-    # REGISTRO AUTOMÁTICO NO PRIMEIRA VISITA VIA /START
     if user_id not in clientes and user_id != str(ADMIN_ID):
         clientes[user_id] = {
             "emails_permitidos": {},
@@ -355,10 +373,8 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
     clientes = carregar_json("clientes.json")
     eh_admin = (user_id == str(ADMIN_ID))
 
-    # RECONHECIMENTO DE PRIMEIRO ACESSO DE CLIENTE NÃO AUTORIZADO
     dados_cliente = clientes.get(user_id, {})
     if not eh_admin and (not dados_cliente or not dados_cliente.get("emails_permitidos")):
-        # Auto-cadastra no clientes.json se ainda não existir
         if user_id not in clientes:
             clientes[user_id] = {
                 "emails_permitidos": {},
@@ -375,7 +391,6 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
         )
         return
 
-    # VALIDAÇÃO DE FORMATO DE E-MAIL
     if not re.match(r"^[\w\.\+-]+@[\w\.-]+\.\w+$", email_original):
         await update.message.reply_text(
             "⚠️ Por favor, digite um **endereço de e-mail válido**.",
