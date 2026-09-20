@@ -90,6 +90,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
     porta = dados_conta.get("porta", 993)
     senha = dados_conta.get("senha_imap")
     email_solicitado = dados_conta.get("email_destinatario", "").lower()
+    email_solicitado_norm = normalizar_email_gmail(email_solicitado)
 
     mail = None
     try:
@@ -146,9 +147,10 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
             corpo_processado = tratar_quopri_e_html(corpo_bruto)
             texto_analise = (assunto + " " + corpo_processado).lower()
+            destinatario_to = normalizar_email_gmail(str(msg.get("To", "")).lower())
 
-            if email_solicitado and email_solicitado not in email_usuario:
-                if email_solicitado not in texto_analise and email_solicitado not in str(msg.get("To", "")).lower():
+            if email_solicitado and email_solicitado_norm not in normalizar_email_gmail(email_usuario):
+                if email_solicitado_norm not in normalizar_email_gmail(texto_analise) and email_solicitado_norm not in destinatario_to:
                     continue
 
             # --- FILTRO 1: IGNORAR NOTIFICAÇÕES APENAS INFORMATIVAS ---
@@ -156,7 +158,27 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 mail.store(msg_id, '+FLAGS', '\\Seen')
                 continue
 
-            # 1. PRIORIDADE MÁXIMA: Links de Atualização / Código Temporário Netflix (Botão 'Receber código')
+            # 1. PRIORIDADE MÁXIMA: Link Conta Globo (Atende cadastro@globo.com e recuperacaoSenha)
+            match_globo_link = re.search(r'https?://[^\s<>"\'\);]*globo\.com[^\s<>"\'\);]*(?:recuperacaoSenha|recuperacao|senha|login|token)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
+            if match_globo_link or "globo.com" in texto_analise:
+                if "recuperar" in texto_analise or "recupera" in texto_analise or match_globo_link:
+                    if not pode_acessar_sensivel:
+                        mail.close()
+                        mail.logout()
+                        return "🚫 **Solicitação Não Permitida!**\n\nO seu usuário não possui permissão VIP para visualizar links de redefinição de senha."
+                    
+                    if match_globo_link:
+                        link_limpo = limpar_link_url(match_globo_link.group(0))
+                        mail.store(msg_id, '+FLAGS', '\\Seen')
+                        mail.close()
+                        mail.logout()
+                        return (
+                            f"✅ **Link de Redefinição Globo Encontrado!**\n\n"
+                            f"🔗 Clique no link abaixo para alterar a senha:\n{link_limpo}\n\n"
+                            f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
+                        )
+
+            # 2. PRIORIDADE 2: Links de Atualização / Código Temporário Netflix
             match_netflix_residencia = re.search(r'https?://[^\s<>"\'\);]+netflix\.com[^\s<>"\'\);]*(?:travel|update-primary-location|verify|household|confirm|code)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
             if match_netflix_residencia:
                 link_limpo = limpar_link_url(match_netflix_residencia.group(0))
@@ -169,7 +191,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
-            # 2. PRIORIDADE 2: Link HBO Max / Max
+            # 3. PRIORIDADE 3: Link HBO Max / Max
             match_hbo_link = re.search(r'https?://[^\s<>"\'\);]*(?:hbomax\.com|max\.com)[^\s<>"\'\);]*(?:reset-password|password|token|reset|recover|alteracao)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
             if match_hbo_link:
                 if not pode_acessar_sensivel:
@@ -187,7 +209,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
-            # 3. PRIORIDADE 3: Link Paramount+
+            # 4. PRIORIDADE 4: Link Paramount+
             match_paramount_link = re.search(r'https?://[^\s<>"\'\);]*paramountplus\.com[^\s<>"\'\);]*(?:reset-password|password|token|reset)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
             if match_paramount_link:
                 if not pode_acessar_sensivel:
@@ -201,24 +223,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 mail.logout()
                 return (
                     f"✅ **Link de Redefinição Paramount+ Encontrado!**\n\n"
-                    f"🔗 Clique no link abaixo para alterar a senha:\n{link_limpo}\n\n"
-                    f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
-                )
-
-            # 4. PRIORIDADE 4: Link Conta Globo
-            match_globo_link = re.search(r'https?://[^\s<>"\'\);]*globo\.com[^\s<>"\'\);]*(?:recuperacaoSenha|recuperacao|senha|login|token)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
-            if match_globo_link:
-                if not pode_acessar_sensivel:
-                    mail.close()
-                    mail.logout()
-                    return "🚫 **Solicitação Não Permitida!**\n\nO seu usuário não possui permissão VIP para visualizar links de redefinição de senha."
-                
-                link_limpo = limpar_link_url(match_globo_link.group(0))
-                mail.store(msg_id, '+FLAGS', '\\Seen')
-                mail.close()
-                mail.logout()
-                return (
-                    f"✅ **Link de Redefinição Globo Encontrado!**\n\n"
                     f"🔗 Clique no link abaixo para alterar a senha:\n{link_limpo}\n\n"
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
@@ -402,7 +406,7 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
     if not eh_admin:
         emails_permitidos = dados_cliente.get("emails_permitidos", {})
         
-        tem_acesso = "*" in emails_permitidos or email_original in emails_permitidos
+        tem_acesso = "*" in emails_permitidos or email_original in emails_permitidos or normalizar_email_gmail(email_original) in [normalizar_email_gmail(e) for e in emails_permitidos.keys()]
 
         if not tem_acesso:
             await update.message.reply_text(
@@ -413,6 +417,12 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
             return
 
         data_expiracao_str = emails_permitidos.get(email_original) or emails_permitidos.get("*")
+        if not data_expiracao_str:
+            for k, v in emails_permitidos.items():
+                if normalizar_email_gmail(k) == normalizar_email_gmail(email_original):
+                    data_expiracao_str = v
+                    break
+
         data_expiracao = datetime.strptime(data_expiracao_str, "%Y-%m-%d").date()
 
         if datetime.now().date() > data_expiracao:
