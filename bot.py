@@ -79,10 +79,10 @@ def limpar_link_url(url: str) -> str:
         return ""
     url_limpa = url.replace("&#x3D;", "=").replace("&amp;", "&")
     url_limpa = re.sub(r'#x3D;?$', '=', url_limpa, flags=re.IGNORECASE)
-    url_limpa = re.sub(r'=\d+$', '=', url_limpa)
-    return url_limpa.rstrip('.,;)"\'')
+    url_limpa = re.sub(r'[\]\)\}\'"\>\.,;]+$', '', url_limpa)
+    return url_limpa.strip()
 
-# --- Leitura IMAP Inteligente e Precisa ---
+# --- Extração IMAP Flexível e Multi-Padrão ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -153,95 +153,39 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 if email_solicitado_norm not in normalizar_email_gmail(texto_analise) and email_solicitado_norm not in destinatario_to:
                     continue
 
-            # --- FILTRO 1: IGNORAR NOTIFICAÇÕES APENAS INFORMATIVAS ---
+            # --- FILTRO DE SEGURANÇA: IGNORAR NOTIFICAÇÕES APENAS INFORMATIVAS ---
             if any(termo in assunto for termo in ["novo login", "alerta de segurança", "dispositivo conectado", "new login"]):
                 mail.store(msg_id, '+FLAGS', '\\Seen')
                 continue
 
-            # 1. PRIORIDADE MÁXIMA: Link Conta Globo (Atende cadastro@globo.com e recuperacaoSenha)
-            match_globo_link = re.search(r'https?://[^\s<>"\'\);]*globo\.com[^\s<>"\'\);]*(?:recuperacaoSenha|recuperacao|senha|login|token)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
-            if match_globo_link or "globo.com" in texto_analise:
-                if "recuperar" in texto_analise or "recupera" in texto_analise or match_globo_link:
-                    if not pode_acessar_sensivel:
-                        mail.close()
-                        mail.logout()
-                        return "🚫 **Solicitação Não Permitida!**\n\nO seu usuário não possui permissão VIP para visualizar links de redefinição de senha."
-                    
-                    if match_globo_link:
-                        link_limpo = limpar_link_url(match_globo_link.group(0))
-                        mail.store(msg_id, '+FLAGS', '\\Seen')
-                        mail.close()
-                        mail.logout()
-                        return (
-                            f"✅ **Link de Redefinição Globo Encontrado!**\n\n"
-                            f"🔗 Clique no link abaixo para alterar a senha:\n{link_limpo}\n\n"
-                            f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
-                        )
-
-            # 2. PRIORIDADE 2: Links de Atualização / Código Temporário Netflix
-            match_netflix_residencia = re.search(r'https?://[^\s<>"\'\);]+netflix\.com[^\s<>"\'\);]*(?:travel|update-primary-location|verify|household|confirm|code)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
-            if match_netflix_residencia:
-                link_limpo = limpar_link_url(match_netflix_residencia.group(0))
+            # === BUSCA 1: LINKS DE ACESSO TEMPORÁRIO / RESIDÊNCIA (NETFLIX, ETC.) ===
+            match_link_acesso = re.search(r'https?://[^\s<>"\'\]\);]+(?:netflix\.com)[^\s<>"\'\]\);]*(?:travel|update-primary-location|verify|household|confirm|code)[^\s<>"\'\]\);]*', corpo_processado, re.IGNORECASE)
+            if match_link_acesso:
+                link_limpo = limpar_link_url(match_link_acesso.group(0))
                 mail.store(msg_id, '+FLAGS', '\\Seen')
                 mail.close()
                 mail.logout()
                 return (
-                    f"✅ **Link de Acesso Netflix Encontrado!**\n\n"
-                    f"🔗 Clique no link abaixo para obter o código/confirmar a residência:\n{link_limpo}\n\n"
+                    f"✅ **Link de Acesso Encontrado!**\n\n"
+                    f"🔗 Clique no link abaixo para obter o código/confirmar acesso:\n{link_limpo}\n\n"
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
-            # 3. PRIORIDADE 3: Link HBO Max / Max
-            match_hbo_link = re.search(r'https?://[^\s<>"\'\);]*(?:hbomax\.com|max\.com)[^\s<>"\'\);]*(?:reset-password|password|token|reset|recover|alteracao)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
-            if match_hbo_link:
+            # === BUSCA 2: LINKS DE REDEFINIÇÃO DE SENHA (TODAS AS PLATAFORMAS) ===
+            regex_redefinicao = r'https?://[^\s<>"\'\]\);]*(?:hbomax\.com|max\.com|paramountplus\.com|globo\.com)[^\s<>"\'\]\);]*(?:reset-password|password|token|reset|recover|alteracao|recuperacaoSenha|recuperacao|senha|login)[^\s<>"\'\]\);]*'
+            match_link_redefinicao = re.search(regex_redefinicao, corpo_processado, re.IGNORECASE)
+            
+            # Tenta capturar URLs genéricas de redefinição se não corresponder às marcas acima
+            if not match_link_redefinicao:
+                match_link_redefinicao = re.search(r'https?://[^\s<>"\'\]\);]+(?:recuperacaosenha|reset-password|password-reset)[^\s<>"\'\]\);]*', corpo_processado, re.IGNORECASE)
+
+            if match_link_redefinicao:
                 if not pode_acessar_sensivel:
                     mail.close()
                     mail.logout()
                     return "🚫 **Solicitação Não Permitida!**\n\nO seu usuário não possui permissão VIP para visualizar links de redefinição de senha."
                 
-                link_limpo = limpar_link_url(match_hbo_link.group(0))
-                mail.store(msg_id, '+FLAGS', '\\Seen')
-                mail.close()
-                mail.logout()
-                return (
-                    f"✅ **Link de Redefinição HBO Max Encontrado!**\n\n"
-                    f"🔗 Clique no link abaixo para alterar a senha:\n{link_limpo}\n\n"
-                    f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
-                )
-
-            # 4. PRIORIDADE 4: Link Paramount+
-            match_paramount_link = re.search(r'https?://[^\s<>"\'\);]*paramountplus\.com[^\s<>"\'\);]*(?:reset-password|password|token|reset)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
-            if match_paramount_link:
-                if not pode_acessar_sensivel:
-                    mail.close()
-                    mail.logout()
-                    return "🚫 **Solicitação Não Permitida!**\n\nO seu usuário não possui permissão VIP para visualizar links de redefinição de senha."
-                
-                link_limpo = limpar_link_url(match_paramount_link.group(0))
-                mail.store(msg_id, '+FLAGS', '\\Seen')
-                mail.close()
-                mail.logout()
-                return (
-                    f"✅ **Link de Redefinição Paramount+ Encontrado!**\n\n"
-                    f"🔗 Clique no link abaixo para alterar a senha:\n{link_limpo}\n\n"
-                    f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
-                )
-
-            # --- VERIFICAÇÃO DE SEGURANÇA PARA OUTRAS REDEFINIÇÕES ---
-            eh_email_redefinicao = any(termo in assunto for termo in ["redefinir sua senha", "reset password", "recuperar sua senha", "alteração de senha"])
-            if eh_email_redefinicao and not pode_acessar_sensivel:
-                mail.close()
-                mail.logout()
-                return (
-                    "🚫 **Solicitação Não Permitida!**\n\n"
-                    "Este e-mail trata-se de uma alteração de senha ou recuperação de conta.\n"
-                    "O seu usuário não possui permissão VIP para visualizar links de redefinição."
-                )
-
-            # 5. PRIORIDADE 5: Outros Links de Redefinição Genéricos
-            match_reset_especifico = re.search(r'https?://[^\s<>"\'\);]+(?:recuperacaosenha|reset-password|password-reset)[^\s<>"\'\);]*', corpo_processado, re.IGNORECASE)
-            if match_reset_especifico and pode_acessar_sensivel:
-                link_limpo = limpar_link_url(match_reset_especifico.group(0))
+                link_limpo = limpar_link_url(match_link_redefinicao.group(0))
                 mail.store(msg_id, '+FLAGS', '\\Seen')
                 mail.close()
                 mail.logout()
@@ -251,7 +195,8 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
-            # 6. PRIORIDADE 6: Extração de CÓDIGOS (Disney, Netflix PIN, Globo PIN)
+            # === BUSCA 3: CÓDIGOS NUMÉRICOS (HBO MAX, DISNEY, NETFLIX, GLOBO, ETC.) ===
+            match_hbo_codigo = re.search(r'(?:código único|seu código único|código de acesso)[^\d]{1,100}(\d{6})\b', corpo_processado, re.IGNORECASE)
             match_disney_estrito = re.search(r'(?:use esse código de acesso|código de acesso único|expira em \d{1,2} minutos)[^\d]{1,100}(\d{6})\b', corpo_processado, re.IGNORECASE)
             match_contexto = re.search(r'(?:código:|código é|código de acesso|confirme com o código|confirmar sua identidade|código para confirmar|informe este código|código de verificação|seu código)[^\d]{1,100}(\d{4,8})\b', corpo_processado, re.IGNORECASE)
             
@@ -259,11 +204,13 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             match_codigo_4 = re.search(r'\b(?!(?:19|20)\d{2}\b)(?!0800\b)\d{4}\b', corpo_processado)
 
             codigo_final = None
-            if match_disney_estrito:
+            if match_hbo_codigo:
+                codigo_final = match_hbo_codigo.group(1)
+            elif match_disney_estrito:
                 codigo_final = match_disney_estrito.group(1)
             elif match_contexto:
                 codigo_final = match_contexto.group(1)
-            elif "código" in texto_analise or "code" in texto_analise:
+            elif any(termo in texto_analise for termo in ["código", "code", "único", "acesso"]):
                 if match_codigo_6:
                     codigo_final = match_codigo_6.group(0)
                 elif match_codigo_4:
@@ -468,7 +415,7 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
             timeout=12.0
         )
     except asyncio.TimeoutError:
-        resultado = "❌ O servidor de e-mail demorou muito a responder. Tente consultar novamente em instantes."
+        resultado = "❌ O servidor de e-mail demorou muito a responder. Tente novamente em instantes."
 
     await msg_carregando.edit_text(resultado, parse_mode="Markdown")
 
