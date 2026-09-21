@@ -52,6 +52,8 @@ def salvar_json(caminho: str, dados: dict):
         logging.error(f"Erro ao salvar {caminho}: {e}")
 
 def normalizar_email_gmail(email_str: str) -> str:
+    if not email_str:
+        return ""
     partes = email_str.strip().lower().split('@')
     if len(partes) != 2:
         return email_str.strip().lower()
@@ -82,7 +84,7 @@ def limpar_link_url(url: str) -> str:
     url_limpa = re.sub(r'[\]\)\}\'"\>\.,;]+$', '', url_limpa)
     return url_limpa.strip()
 
-# --- Extração IMAP Flexível e Multi-Padrão ---
+# --- Extração IMAP Flexível e Universal ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -90,7 +92,10 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
     porta = dados_conta.get("porta", 993)
     senha = dados_conta.get("senha_imap")
     email_solicitado = dados_conta.get("email_destinatario", "").lower()
+    
+    # Normalização Total do Gmail (remove pontos e aliases +)
     email_solicitado_norm = normalizar_email_gmail(email_solicitado)
+    email_usuario_norm = normalizar_email_gmail(email_usuario)
 
     mail = None
     try:
@@ -147,9 +152,10 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
             corpo_processado = tratar_quopri_e_html(corpo_bruto)
             texto_analise = (assunto + " " + corpo_processado).lower()
-            destinatario_to = normalizar_email_gmail(str(msg.get("To", "")).lower())
+            destinatario_to = normalizar_email_gmail(str(msg.get("To", "")))
 
-            if email_solicitado and email_solicitado_norm not in normalizar_email_gmail(email_usuario):
+            # Validação flexível do destinatário (ignora variações de ponto no Gmail)
+            if email_solicitado_norm and email_solicitado_norm != email_usuario_norm:
                 if email_solicitado_norm not in normalizar_email_gmail(texto_analise) and email_solicitado_norm not in destinatario_to:
                     continue
 
@@ -175,7 +181,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             regex_redefinicao = r'https?://[^\s<>"\'\]\);]*(?:hbomax\.com|max\.com|paramountplus\.com|globo\.com)[^\s<>"\'\]\);]*(?:reset-password|password|token|reset|recover|alteracao|recuperacaoSenha|recuperacao|senha|login)[^\s<>"\'\]\);]*'
             match_link_redefinicao = re.search(regex_redefinicao, corpo_processado, re.IGNORECASE)
             
-            # Tenta capturar URLs genéricas de redefinição se não corresponder às marcas acima
             if not match_link_redefinicao:
                 match_link_redefinicao = re.search(r'https?://[^\s<>"\'\]\);]+(?:recuperacaosenha|reset-password|password-reset)[^\s<>"\'\]\);]*', corpo_processado, re.IGNORECASE)
 
@@ -195,26 +200,15 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
-            # === BUSCA 3: CÓDIGOS NUMÉRICOS (HBO MAX, DISNEY, NETFLIX, GLOBO, ETC.) ===
-            match_hbo_codigo = re.search(r'(?:código único|seu código único|código de acesso)[^\d]{1,100}(\d{6})\b', corpo_processado, re.IGNORECASE)
-            match_disney_estrito = re.search(r'(?:use esse código de acesso|código de acesso único|expira em \d{1,2} minutos)[^\d]{1,100}(\d{6})\b', corpo_processado, re.IGNORECASE)
-            match_contexto = re.search(r'(?:código:|código é|código de acesso|confirme com o código|confirmar sua identidade|código para confirmar|informe este código|código de verificação|seu código)[^\d]{1,100}(\d{4,8})\b', corpo_processado, re.IGNORECASE)
-            
+            # === BUSCA 3: CÓDIGOS NUMÉRICOS UNIVERSAIS (HBO MAX, DISNEY, NETFLIX, GLOBO) ===
             match_codigo_6 = re.search(r'\b(?!(?:19|20)\d{2}\b)(?!(?:666666|252526|707070|232323|000000|ffffff|333333|444444|888888|999999)\b)\d{6}\b', corpo_processado)
             match_codigo_4 = re.search(r'\b(?!(?:19|20)\d{2}\b)(?!0800\b)\d{4}\b', corpo_processado)
 
             codigo_final = None
-            if match_hbo_codigo:
-                codigo_final = match_hbo_codigo.group(1)
-            elif match_disney_estrito:
-                codigo_final = match_disney_estrito.group(1)
-            elif match_contexto:
-                codigo_final = match_contexto.group(1)
-            elif any(termo in texto_analise for termo in ["código", "code", "único", "acesso"]):
-                if match_codigo_6:
-                    codigo_final = match_codigo_6.group(0)
-                elif match_codigo_4:
-                    codigo_final = match_codigo_4.group(0)
+            if match_codigo_6:
+                codigo_final = match_codigo_6.group(0)
+            elif match_codigo_4:
+                codigo_final = match_codigo_4.group(0)
 
             if codigo_final:
                 mail.store(msg_id, '+FLAGS', '\\Seen')
