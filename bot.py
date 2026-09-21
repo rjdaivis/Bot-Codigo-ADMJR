@@ -77,14 +77,10 @@ def tratar_quopri_e_html(payload_bytes: bytes) -> str:
     return texto_limpo
 
 def extrair_apenas_texto_limpo(html_str: str) -> str:
-    """ Remove tags HTML, scripts e estilos para evitar pegar IDs internos do e-mail """
     if not html_str:
         return ""
-    # Remove blocos de estilo e script
     texto = re.sub(r'<(style|script)[^>]*>.*?</\1>', '', html_str, flags=re.DOTALL | re.IGNORECASE)
-    # Remove todas as tags HTML
     texto = re.sub(r'<[^>]+>', ' ', texto)
-    # Normaliza espaços em branco
     texto = re.sub(r'\s+', ' ', texto)
     return texto.strip()
 
@@ -96,7 +92,7 @@ def limpar_link_url(url: str) -> str:
     url_limpa = re.sub(r'[\]\)\}\'"\>\.,;]+$', '', url_limpa)
     return url_limpa.strip()
 
-# --- Extração IMAP Flexível e Contextual ---
+# --- Extração IMAP Estável sem Dependência de Status Não Lido ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -116,14 +112,15 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
         
         mail.select("INBOX")
 
-        status, messages = mail.search(None, "UNSEEN")
+        # Busca por TODOS os e-mails recentes (lidos ou não lidos)
+        status, messages = mail.search(None, "ALL")
         if status != "OK" or not messages[0]:
             mail.close()
             mail.logout()
-            return "⚠️ Nenhum NOVO e-mail (não lido) recebido nos últimos 15 minutos foi localizado nesta caixa. Solicite o reenvio na plataforma."
+            return "⚠️ Nenhum e-mail recebido nos últimos 15 minutos foi localizado nesta caixa. Solicite o reenvio na plataforma."
 
         id_list = messages[0].split()
-        ultimos_ids = id_list[-10:]
+        ultimos_ids = id_list[-15:]
         ultimos_ids.reverse()
 
         for msg_id in ultimos_ids:
@@ -141,6 +138,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             agora = datetime.now(timezone.utc)
             diferenca_tempo = agora - data_email
 
+            # Mantém estritamente a janela de 15 minutos de tolerância
             if diferenca_tempo > timedelta(minutes=15):
                 continue
 
@@ -174,14 +172,12 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
             # --- FILTRO DE SEGURANÇA: IGNORAR NOTIFICAÇÕES APENAS INFORMATIVAS ---
             if any(termo in assunto for termo in ["novo login", "alerta de segurança", "dispositivo conectado", "new login"]):
-                mail.store(msg_id, '+FLAGS', '\\Seen')
                 continue
 
             # === BUSCA 1: LINKS DE ACESSO TEMPORÁRIO / RESIDÊNCIA (NETFLIX) ===
             match_link_acesso = re.search(r'https?://[^\s<>"\'\]\);]+(?:netflix\.com)[^\s<>"\'\]\);]*(?:travel|update-primary-location|verify|household|confirm|code)[^\s<>"\'\]\);]*', corpo_processado, re.IGNORECASE)
             if match_link_acesso:
                 link_limpo = limpar_link_url(match_link_acesso.group(0))
-                mail.store(msg_id, '+FLAGS', '\\Seen')
                 mail.close()
                 mail.logout()
                 return (
@@ -190,7 +186,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
-            # === BUSCA 2: LINKS DE REDEFINIÇÃO DE SENHA (TODAS AS PLATAFORMAS) ===
+            # === BUSCA 2: LINKS DE REDEFINIÇÃO DE SENHA (GLOBO, HBO MAX, PARAMOUNT, ETC.) ===
             regex_redefinicao = r'https?://[^\s<>"\'\]\);]*(?:hbomax\.com|max\.com|paramountplus\.com|globo\.com)[^\s<>"\'\]\);]*(?:reset-password|password|token|reset|recover|alteracao|recuperacaoSenha|recuperacao|senha|login)[^\s<>"\'\]\);]*'
             match_link_redefinicao = re.search(regex_redefinicao, corpo_processado, re.IGNORECASE)
             
@@ -204,7 +200,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     return "🚫 **Solicitação Não Permitida!**\n\nO seu usuário não possui permissão VIP para visualizar links de redefinição de senha."
                 
                 link_limpo = limpar_link_url(match_link_redefinicao.group(0))
-                mail.store(msg_id, '+FLAGS', '\\Seen')
                 mail.close()
                 mail.logout()
                 return (
@@ -214,7 +209,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 )
 
             # === BUSCA 3: CÓDIGOS NUMÉRICOS COM CONTEXTO (DISNEY, HBO MAX, GLOBO, NETFLIX) ===
-            # Padrões com palavras antes do código (ex: Disney+, HBO Max, Netflix)
             match_contexto_forte = re.search(
                 r'(?:código de acesso único|use esse código de acesso|seu código de acesso|seu código único|código único|código de verificação|seu código|código:|código é)[^\d]{1,100}(\d{6})\b', 
                 corpo_texto_puro, 
@@ -227,8 +221,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 re.IGNORECASE
             )
 
-            # Padrão solto de 6 dígitos no texto limpo (sem tags HTML)
-            match_codigo_solto = re.search(
+            match_codigo_solto_6 = re.search(
                 r'\b(?!(?:19|20)\d{2}\b)(?!(?:666666|252526|707070|232323|000000|ffffff|333333|444444|888888|999999)\b)\d{6}\b', 
                 corpo_texto_puro
             )
@@ -238,11 +231,10 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 codigo_final = match_contexto_forte.group(1)
             elif match_contexto_generico:
                 codigo_final = match_contexto_generico.group(1)
-            elif match_codigo_solto:
-                codigo_final = match_codigo_solto.group(0)
+            elif match_codigo_solto_6 and any(k in texto_analise for k in ["código", "code", "único", "acesso"]):
+                codigo_final = match_codigo_solto_6.group(0)
 
             if codigo_final:
-                mail.store(msg_id, '+FLAGS', '\\Seen')
                 mail.close()
                 mail.logout()
                 return (
@@ -253,7 +245,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
         mail.close()
         mail.logout()
-        return "⚠️ Nenhum NOVO e-mail (não lido) com código ou link de acesso foi localizado nesta caixa nos últimos 15 minutos."
+        return "⚠️ Nenhum e-mail recente (últimos 15 minutos) com código ou link válido foi localizado nesta caixa."
 
     except socket.timeout:
         return "❌ O servidor de e-mail demorou muito para responder (Timeout). Tente novamente em instantes."
