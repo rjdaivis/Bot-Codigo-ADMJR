@@ -76,6 +76,18 @@ def tratar_quopri_e_html(payload_bytes: bytes) -> str:
     texto_limpo = html.unescape(texto_sem_quebras)
     return texto_limpo
 
+def extrair_apenas_texto_limpo(html_str: str) -> str:
+    """ Remove tags HTML, scripts e estilos para evitar pegar IDs internos do e-mail """
+    if not html_str:
+        return ""
+    # Remove blocos de estilo e script
+    texto = re.sub(r'<(style|script)[^>]*>.*?</\1>', '', html_str, flags=re.DOTALL | re.IGNORECASE)
+    # Remove todas as tags HTML
+    texto = re.sub(r'<[^>]+>', ' ', texto)
+    # Normaliza espaços em branco
+    texto = re.sub(r'\s+', ' ', texto)
+    return texto.strip()
+
 def limpar_link_url(url: str) -> str:
     if not url:
         return ""
@@ -84,7 +96,7 @@ def limpar_link_url(url: str) -> str:
     url_limpa = re.sub(r'[\]\)\}\'"\>\.,;]+$', '', url_limpa)
     return url_limpa.strip()
 
-# --- Extração IMAP Flexível e Universal ---
+# --- Extração IMAP Flexível e Contextual ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -93,7 +105,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
     senha = dados_conta.get("senha_imap")
     email_solicitado = dados_conta.get("email_destinatario", "").lower()
     
-    # Normalização Total do Gmail (remove pontos e aliases +)
     email_solicitado_norm = normalizar_email_gmail(email_solicitado)
     email_usuario_norm = normalizar_email_gmail(email_usuario)
 
@@ -151,10 +162,12 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     corpo_bruto = payload
 
             corpo_processado = tratar_quopri_e_html(corpo_bruto)
-            texto_analise = (assunto + " " + corpo_processado).lower()
+            corpo_texto_puro = extrair_apenas_texto_limpo(corpo_processado)
+            
+            texto_analise = (assunto + " " + corpo_texto_puro).lower()
             destinatario_to = normalizar_email_gmail(str(msg.get("To", "")))
 
-            # Validação flexível do destinatário (ignora variações de ponto no Gmail)
+            # Validação flexível do destinatário
             if email_solicitado_norm and email_solicitado_norm != email_usuario_norm:
                 if email_solicitado_norm not in normalizar_email_gmail(texto_analise) and email_solicitado_norm not in destinatario_to:
                     continue
@@ -164,7 +177,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 mail.store(msg_id, '+FLAGS', '\\Seen')
                 continue
 
-            # === BUSCA 1: LINKS DE ACESSO TEMPORÁRIO / RESIDÊNCIA (NETFLIX, ETC.) ===
+            # === BUSCA 1: LINKS DE ACESSO TEMPORÁRIO / RESIDÊNCIA (NETFLIX) ===
             match_link_acesso = re.search(r'https?://[^\s<>"\'\]\);]+(?:netflix\.com)[^\s<>"\'\]\);]*(?:travel|update-primary-location|verify|household|confirm|code)[^\s<>"\'\]\);]*', corpo_processado, re.IGNORECASE)
             if match_link_acesso:
                 link_limpo = limpar_link_url(match_link_acesso.group(0))
@@ -200,15 +213,33 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
-            # === BUSCA 3: CÓDIGOS NUMÉRICOS UNIVERSAIS (HBO MAX, DISNEY, NETFLIX, GLOBO) ===
-            match_codigo_6 = re.search(r'\b(?!(?:19|20)\d{2}\b)(?!(?:666666|252526|707070|232323|000000|ffffff|333333|444444|888888|999999)\b)\d{6}\b', corpo_processado)
-            match_codigo_4 = re.search(r'\b(?!(?:19|20)\d{2}\b)(?!0800\b)\d{4}\b', corpo_processado)
+            # === BUSCA 3: CÓDIGOS NUMÉRICOS COM CONTEXTO (DISNEY, HBO MAX, GLOBO, NETFLIX) ===
+            # Padrões com palavras antes do código (ex: Disney+, HBO Max, Netflix)
+            match_contexto_forte = re.search(
+                r'(?:código de acesso único|use esse código de acesso|seu código de acesso|seu código único|código único|código de verificação|seu código|código:|código é)[^\d]{1,100}(\d{6})\b', 
+                corpo_texto_puro, 
+                re.IGNORECASE
+            )
+
+            match_contexto_generico = re.search(
+                r'(?:confirme com o código|confirmar sua identidade|código para confirmar|informe este código)[^\d]{1,100}(\d{4,8})\b', 
+                corpo_texto_puro, 
+                re.IGNORECASE
+            )
+
+            # Padrão solto de 6 dígitos no texto limpo (sem tags HTML)
+            match_codigo_solto = re.search(
+                r'\b(?!(?:19|20)\d{2}\b)(?!(?:666666|252526|707070|232323|000000|ffffff|333333|444444|888888|999999)\b)\d{6}\b', 
+                corpo_texto_puro
+            )
 
             codigo_final = None
-            if match_codigo_6:
-                codigo_final = match_codigo_6.group(0)
-            elif match_codigo_4:
-                codigo_final = match_codigo_4.group(0)
+            if match_contexto_forte:
+                codigo_final = match_contexto_forte.group(1)
+            elif match_contexto_generico:
+                codigo_final = match_contexto_generico.group(1)
+            elif match_codigo_solto:
+                codigo_final = match_codigo_solto.group(0)
 
             if codigo_final:
                 mail.store(msg_id, '+FLAGS', '\\Seen')
