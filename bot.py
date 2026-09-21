@@ -92,7 +92,7 @@ def limpar_link_url(url: str) -> str:
     url_limpa = re.sub(r'[\]\)\}\'"\>\.,;]+$', '', url_limpa)
     return url_limpa.strip()
 
-# --- Motor IMAP Preciso e Direcionado ---
+# --- Extração IMAP Ultra-Rápida e Estável ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -106,21 +106,30 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
     mail = None
     try:
-        socket.setdefaulttimeout(7)
+        socket.setdefaulttimeout(8)
         mail = imaplib.IMAP4_SSL(host, porta)
         mail.login(email_usuario, senha)
         
         mail.select("INBOX")
 
-        status, messages = mail.search(None, "ALL")
+        # OTIMIZAÇÃO: Busca direto no servidor apenas e-mails de HOJE/ONTEM para evitar varrer 12mil e-mails
+        data_busca = (datetime.now() - timedelta(days=1)).strftime("%d-%b-%Y")
+        status, messages = mail.search(None, f'(SINCE "{data_busca}")')
+        
         if status != "OK" or not messages[0]:
+            # Fallback rápido se a busca por data falhar
+            status, messages = mail.search(None, "ALL")
+
+        if not messages[0]:
             mail.close()
             mail.logout()
-            return "⚠️ Nenhum e-mail recebido nos últimos 15 minutos foi localizado nesta caixa. Solicite o reenvio na plataforma."
+            return "⚠️ Nenhum e-mail recente (últimos 15 minutos) localizado nesta caixa."
 
         id_list = messages[0].split()
-        ultimos_ids = id_list[-15:]
+        ultimos_ids = id_list[-10:] # Pega apenas os 10 mais recentes da caixa
         ultimos_ids.reverse()
+
+        agora = datetime.now(timezone.utc)
 
         for msg_id in ultimos_ids:
             _, data = mail.fetch(msg_id, "(RFC822)")
@@ -134,7 +143,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 continue
 
             data_email = parsedate_to_datetime(data_email_header)
-            agora = datetime.now(timezone.utc)
             diferenca_tempo = agora - data_email
 
             if diferenca_tempo > timedelta(minutes=15):
@@ -173,7 +181,30 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 continue
 
             # =========================================================================
-            # CATEGORIA 1: LINKS DE REDEFINIÇÃO DE SENHA (VIP REQUERIDO)
+            # 1. LINKS DE RESIDÊNCIA / ATUALIZAÇÃO / ACESSO TEMPORÁRIO (NETFLIX)
+            # =========================================================================
+            match_netflix_residencia = re.search(
+                r'https?://[^\s<>"\'\]\);]+netflix\.com[^\s<>"\'\]\);]*(?:travel|update-primary-location|verify|household|confirm|code)[^\s<>"\'\]\);]*', 
+                corpo_processado, 
+                re.IGNORECASE
+            )
+            
+            eh_assunto_residencia = any(termo in assunto for termo in ["atualizar sua resi", "residência", "acesso temporário", "código de acesso"])
+
+            if match_netflix_residencia or (eh_assunto_residencia and "netflix" in texto_analise):
+                # Se encontrou o link no corpo HTML
+                if match_netflix_residencia:
+                    link_limpo = limpar_link_url(match_netflix_residencia.group(0))
+                    mail.close()
+                    mail.logout()
+                    return (
+                        f"✅ **Link de Atualização de Residência Netflix Encontrado!**\n\n"
+                        f"🔗 Clique no link abaixo para confirmar:\n{link_limpo}\n\n"
+                        f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
+                    )
+
+            # =========================================================================
+            # 2. LINKS DE REDEFINIÇÃO DE SENHA (VIP REQUERIDO)
             # =========================================================================
             match_redefinicao = (
                 re.search(r'https?://[^\s<>"\'\]\);]+netflix\.com[^\s<>"\'\]\);]*(?:password|reset)[^\s<>"\'\]\);]*', corpo_processado, re.IGNORECASE) or
@@ -185,7 +216,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
             eh_assunto_redefinicao = any(termo in assunto for termo in ["redefinição", "redefinir", "recuperar", "alteração de senha", "reset password"])
 
-            if match_redefinicao or eh_assunto_redefinicao:
+            if match_redefinicao or (eh_assunto_redefinicao and not eh_assunto_residencia):
                 if not pode_acessar_sensivel:
                     mail.close()
                     mail.logout()
@@ -202,21 +233,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     )
 
             # =========================================================================
-            # CATEGORIA 2: LINKS DE RESIDÊNCIA E ACESSO TEMPORÁRIO (NETFLIX)
-            # =========================================================================
-            match_netflix_residencia = re.search(r'https?://[^\s<>"\'\]\);]+netflix\.com[^\s<>"\'\]\);]*(?:travel|update-primary-location|verify|household|confirm|code)[^\s<>"\'\]\);]*', corpo_processado, re.IGNORECASE)
-            if match_netflix_residencia:
-                link_limpo = limpar_link_url(match_netflix_residencia.group(0))
-                mail.close()
-                mail.logout()
-                return (
-                    f"✅ **Link de Atualização de Residência Netflix Encontrado!**\n\n"
-                    f"🔗 Clique no link abaixo para confirmar:\n{link_limpo}\n\n"
-                    f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
-                )
-
-            # =========================================================================
-            # CATEGORIA 3: CÓDIGOS DE VERIFICAÇÃO / ENTRADA (CONTEXTO OBRIGATÓRIO)
+            # 3. CÓDIGOS DE VERIFICAÇÃO / ENTRADA (DISNEY, HBO MAX, GLOBO, NETFLIX)
             # =========================================================================
             match_codigo_contexto = re.search(
                 r'(?:código de acesso único|use esse código de acesso|seu código de acesso|seu código único|código único|código de verificação|seu código|código:|código é|informe este código|confirmar sua identidade)[^\d]{1,100}(\d{4,8})\b', 
