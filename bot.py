@@ -92,7 +92,7 @@ def limpar_link_url(url: str) -> str:
     url_limpa = re.sub(r'[\]\)\}\'"\>\.,;]+$', '', url_limpa)
     return url_limpa.strip()
 
-# --- Extração IMAP Estável sem Dependência de Status Não Lido ---
+# --- Motor IMAP Preciso e Direcionado ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -112,7 +112,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
         
         mail.select("INBOX")
 
-        # Busca por TODOS os e-mails recentes (lidos ou não lidos)
         status, messages = mail.search(None, "ALL")
         if status != "OK" or not messages[0]:
             mail.close()
@@ -138,7 +137,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             agora = datetime.now(timezone.utc)
             diferenca_tempo = agora - data_email
 
-            # Mantém estritamente a janela de 15 minutos de tolerância
             if diferenca_tempo > timedelta(minutes=15):
                 continue
 
@@ -165,81 +163,74 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             texto_analise = (assunto + " " + corpo_texto_puro).lower()
             destinatario_to = normalizar_email_gmail(str(msg.get("To", "")))
 
-            # Validação flexível do destinatário
+            # Validação do destinatário
             if email_solicitado_norm and email_solicitado_norm != email_usuario_norm:
                 if email_solicitado_norm not in normalizar_email_gmail(texto_analise) and email_solicitado_norm not in destinatario_to:
                     continue
 
-            # --- FILTRO DE SEGURANÇA: IGNORAR NOTIFICAÇÕES APENAS INFORMATIVAS ---
+            # Filtro para ignorar notificações informativas de login
             if any(termo in assunto for termo in ["novo login", "alerta de segurança", "dispositivo conectado", "new login"]):
                 continue
 
-            # === BUSCA 1: LINKS DE ACESSO TEMPORÁRIO / RESIDÊNCIA (NETFLIX) ===
-            match_link_acesso = re.search(r'https?://[^\s<>"\'\]\);]+(?:netflix\.com)[^\s<>"\'\]\);]*(?:travel|update-primary-location|verify|household|confirm|code)[^\s<>"\'\]\);]*', corpo_processado, re.IGNORECASE)
-            if match_link_acesso:
-                link_limpo = limpar_link_url(match_link_acesso.group(0))
-                mail.close()
-                mail.logout()
-                return (
-                    f"✅ **Link de Acesso Encontrado!**\n\n"
-                    f"🔗 Clique no link abaixo para obter o código/confirmar acesso:\n{link_limpo}\n\n"
-                    f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
-                )
+            # =========================================================================
+            # CATEGORIA 1: LINKS DE REDEFINIÇÃO DE SENHA (VIP REQUERIDO)
+            # =========================================================================
+            match_redefinicao = (
+                re.search(r'https?://[^\s<>"\'\]\);]+netflix\.com[^\s<>"\'\]\);]*(?:password|reset)[^\s<>"\'\]\);]*', corpo_processado, re.IGNORECASE) or
+                re.search(r'https?://[^\s<>"\'\]\);]*(?:hbomax\.com|max\.com)[^\s<>"\'\]\);]*(?:reset-password|password|token|reset|recover|alteracao)[^\s<>"\'\]\);]*', corpo_processado, re.IGNORECASE) or
+                re.search(r'https?://[^\s<>"\'\]\);]*globo\.com[^\s<>"\'\]\);]*(?:recuperacaoSenha|recuperacao|senha|login|token)[^\s<>"\'\]\);]*', corpo_processado, re.IGNORECASE) or
+                re.search(r'https?://[^\s<>"\'\]\);]*paramountplus\.com[^\s<>"\'\]\);]*(?:reset-password|password|token|reset)[^\s<>"\'\]\);]*', corpo_processado, re.IGNORECASE) or
+                re.search(r'https?://[^\s<>"\'\]\);]+(?:recuperacaosenha|reset-password|password-reset)[^\s<>"\'\]\);]*', corpo_processado, re.IGNORECASE)
+            )
 
-            # === BUSCA 2: LINKS DE REDEFINIÇÃO DE SENHA (GLOBO, HBO MAX, PARAMOUNT, ETC.) ===
-            regex_redefinicao = r'https?://[^\s<>"\'\]\);]*(?:hbomax\.com|max\.com|paramountplus\.com|globo\.com)[^\s<>"\'\]\);]*(?:reset-password|password|token|reset|recover|alteracao|recuperacaoSenha|recuperacao|senha|login)[^\s<>"\'\]\);]*'
-            match_link_redefinicao = re.search(regex_redefinicao, corpo_processado, re.IGNORECASE)
-            
-            if not match_link_redefinicao:
-                match_link_redefinicao = re.search(r'https?://[^\s<>"\'\]\);]+(?:recuperacaosenha|reset-password|password-reset)[^\s<>"\'\]\);]*', corpo_processado, re.IGNORECASE)
+            eh_assunto_redefinicao = any(termo in assunto for termo in ["redefinição", "redefinir", "recuperar", "alteração de senha", "reset password"])
 
-            if match_link_redefinicao:
+            if match_redefinicao or eh_assunto_redefinicao:
                 if not pode_acessar_sensivel:
                     mail.close()
                     mail.logout()
                     return "🚫 **Solicitação Não Permitida!**\n\nO seu usuário não possui permissão VIP para visualizar links de redefinição de senha."
-                
-                link_limpo = limpar_link_url(match_link_redefinicao.group(0))
+
+                if match_redefinicao:
+                    link_limpo = limpar_link_url(match_redefinicao.group(0))
+                    mail.close()
+                    mail.logout()
+                    return (
+                        f"✅ **Link de Redefinição de Senha Encontrado!**\n\n"
+                        f"🔗 Clique no link abaixo para redefinir:\n{link_limpo}\n\n"
+                        f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
+                    )
+
+            # =========================================================================
+            # CATEGORIA 2: LINKS DE RESIDÊNCIA E ACESSO TEMPORÁRIO (NETFLIX)
+            # =========================================================================
+            match_netflix_residencia = re.search(r'https?://[^\s<>"\'\]\);]+netflix\.com[^\s<>"\'\]\);]*(?:travel|update-primary-location|verify|household|confirm|code)[^\s<>"\'\]\);]*', corpo_processado, re.IGNORECASE)
+            if match_netflix_residencia:
+                link_limpo = limpar_link_url(match_netflix_residencia.group(0))
                 mail.close()
                 mail.logout()
                 return (
-                    f"✅ **Link de Redefinição Encontrado!**\n\n"
-                    f"🔗 Clique no link abaixo para alterar a senha:\n{link_limpo}\n\n"
+                    f"✅ **Link de Atualização de Residência Netflix Encontrado!**\n\n"
+                    f"🔗 Clique no link abaixo para confirmar:\n{link_limpo}\n\n"
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
-            # === BUSCA 3: CÓDIGOS NUMÉRICOS COM CONTEXTO (DISNEY, HBO MAX, GLOBO, NETFLIX) ===
-            match_contexto_forte = re.search(
-                r'(?:código de acesso único|use esse código de acesso|seu código de acesso|seu código único|código único|código de verificação|seu código|código:|código é)[^\d]{1,100}(\d{6})\b', 
+            # =========================================================================
+            # CATEGORIA 3: CÓDIGOS DE VERIFICAÇÃO / ENTRADA (CONTEXTO OBRIGATÓRIO)
+            # =========================================================================
+            match_codigo_contexto = re.search(
+                r'(?:código de acesso único|use esse código de acesso|seu código de acesso|seu código único|código único|código de verificação|seu código|código:|código é|informe este código|confirmar sua identidade)[^\d]{1,100}(\d{4,8})\b', 
                 corpo_texto_puro, 
                 re.IGNORECASE
             )
 
-            match_contexto_generico = re.search(
-                r'(?:confirme com o código|confirmar sua identidade|código para confirmar|informe este código)[^\d]{1,100}(\d{4,8})\b', 
-                corpo_texto_puro, 
-                re.IGNORECASE
-            )
-
-            match_codigo_solto_6 = re.search(
-                r'\b(?!(?:19|20)\d{2}\b)(?!(?:666666|252526|707070|232323|000000|ffffff|333333|444444|888888|999999)\b)\d{6}\b', 
-                corpo_texto_puro
-            )
-
-            codigo_final = None
-            if match_contexto_forte:
-                codigo_final = match_contexto_forte.group(1)
-            elif match_contexto_generico:
-                codigo_final = match_contexto_generico.group(1)
-            elif match_codigo_solto_6 and any(k in texto_analise for k in ["código", "code", "único", "acesso"]):
-                codigo_final = match_codigo_solto_6.group(0)
-
-            if codigo_final:
+            if match_codigo_contexto:
+                codigo_encontrado = match_codigo_contexto.group(1)
                 mail.close()
                 mail.logout()
                 return (
-                    f"✅ **Código Encontrado!**\n\n"
-                    f"🔑 Seu código é: `{codigo_final}`\n\n"
+                    f"✅ **Código de Verificação Encontrado!**\n\n"
+                    f"🔑 Seu código é: `{codigo_encontrado}`\n\n"
                     f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
                 )
 
