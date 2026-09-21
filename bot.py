@@ -92,7 +92,7 @@ def limpar_link_url(url: str) -> str:
     url_limpa = re.sub(r'[\]\)\}\'"\>\.,;]+$', '', url_limpa)
     return url_limpa.strip()
 
-# --- Extração IMAP Ultra-Rápida e Estável ---
+# --- Extração IMAP de Alta Performance (Com Trava Rígida de 15 Minutos) ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -106,18 +106,17 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
     mail = None
     try:
-        socket.setdefaulttimeout(8)
+        socket.setdefaulttimeout(6)
         mail = imaplib.IMAP4_SSL(host, porta)
         mail.login(email_usuario, senha)
         
         mail.select("INBOX")
 
-        # OTIMIZAÇÃO: Busca direto no servidor apenas e-mails de HOJE/ONTEM para evitar varrer 12mil e-mails
-        data_busca = (datetime.now() - timedelta(days=1)).strftime("%d-%b-%Y")
-        status, messages = mail.search(None, f'(SINCE "{data_busca}")')
+        # Filtra direto no servidor apenas e-mails do dia para ser ultra-rápido
+        data_hoje = datetime.now().strftime("%d-%b-%Y")
+        status, messages = mail.search(None, f'(SINCE "{data_hoje}")')
         
         if status != "OK" or not messages[0]:
-            # Fallback rápido se a busca por data falhar
             status, messages = mail.search(None, "ALL")
 
         if not messages[0]:
@@ -126,29 +125,41 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             return "⚠️ Nenhum e-mail recente (últimos 15 minutos) localizado nesta caixa."
 
         id_list = messages[0].split()
-        ultimos_ids = id_list[-10:] # Pega apenas os 10 mais recentes da caixa
+        ultimos_ids = id_list[-10:]  # Avalia apenas as 10 mensagens mais recentes
         ultimos_ids.reverse()
 
         agora = datetime.now(timezone.utc)
 
         for msg_id in ultimos_ids:
-            _, data = mail.fetch(msg_id, "(RFC822)")
-            if not data or not data[0]:
+            # ETAPA 1: Baixa APENAS os cabeçalhos para conferir data e evitar travamentos
+            _, data_header = mail.fetch(msg_id, "(BODY[HEADER.FIELDS (DATE SUBJECT TO FROM)])")
+            if not data_header or not data_header[0]:
                 continue
                 
-            msg = email.message_from_bytes(data[0][1])
+            msg_header = email.message_from_bytes(data_header[0][1])
 
-            data_email_header = msg.get("Date")
+            data_email_header = msg_header.get("Date")
             if not data_email_header:
                 continue
 
-            data_email = parsedate_to_datetime(data_email_header)
-            diferenca_tempo = agora - data_email
+            try:
+                data_email = parsedate_to_datetime(data_email_header)
+                diferenca_tempo = agora - data_email
+            except Exception:
+                continue
 
+            # REGRA RÍGIDA DOS 15 MINUTOS: Se for mais antigo, ignora na hora!
             if diferenca_tempo > timedelta(minutes=15):
                 continue
 
-            assunto = str(msg.get("Subject", "")).lower()
+            assunto = str(msg_header.get("Subject", "")).lower()
+
+            # ETAPA 2: Somente se estiver dentro dos 15 minutos, baixa o corpo completo
+            _, data_body = mail.fetch(msg_id, "(RFC822)")
+            if not data_body or not data_body[0]:
+                continue
+
+            msg = email.message_from_bytes(data_body[0][1])
 
             corpo_bruto = b""
             if msg.is_multipart():
@@ -176,35 +187,12 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 if email_solicitado_norm not in normalizar_email_gmail(texto_analise) and email_solicitado_norm not in destinatario_to:
                     continue
 
-            # Filtro para ignorar notificações informativas de login
+            # Ignora alertas informativos de novo login
             if any(termo in assunto for termo in ["novo login", "alerta de segurança", "dispositivo conectado", "new login"]):
                 continue
 
             # =========================================================================
-            # 1. LINKS DE RESIDÊNCIA / ATUALIZAÇÃO / ACESSO TEMPORÁRIO (NETFLIX)
-            # =========================================================================
-            match_netflix_residencia = re.search(
-                r'https?://[^\s<>"\'\]\);]+netflix\.com[^\s<>"\'\]\);]*(?:travel|update-primary-location|verify|household|confirm|code)[^\s<>"\'\]\);]*', 
-                corpo_processado, 
-                re.IGNORECASE
-            )
-            
-            eh_assunto_residencia = any(termo in assunto for termo in ["atualizar sua resi", "residência", "acesso temporário", "código de acesso"])
-
-            if match_netflix_residencia or (eh_assunto_residencia and "netflix" in texto_analise):
-                # Se encontrou o link no corpo HTML
-                if match_netflix_residencia:
-                    link_limpo = limpar_link_url(match_netflix_residencia.group(0))
-                    mail.close()
-                    mail.logout()
-                    return (
-                        f"✅ **Link de Atualização de Residência Netflix Encontrado!**\n\n"
-                        f"🔗 Clique no link abaixo para confirmar:\n{link_limpo}\n\n"
-                        f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
-                    )
-
-            # =========================================================================
-            # 2. LINKS DE REDEFINIÇÃO DE SENHA (VIP REQUERIDO)
+            # 1. LINKS DE REDEFINIÇÃO DE SENHA (VIP REQUERIDO)
             # =========================================================================
             match_redefinicao = (
                 re.search(r'https?://[^\s<>"\'\]\);]+netflix\.com[^\s<>"\'\]\);]*(?:password|reset)[^\s<>"\'\]\);]*', corpo_processado, re.IGNORECASE) or
@@ -216,7 +204,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
             eh_assunto_redefinicao = any(termo in assunto for termo in ["redefinição", "redefinir", "recuperar", "alteração de senha", "reset password"])
 
-            if match_redefinicao or (eh_assunto_redefinicao and not eh_assunto_residencia):
+            if match_redefinicao or eh_assunto_redefinicao:
                 if not pode_acessar_sensivel:
                     mail.close()
                     mail.logout()
@@ -233,7 +221,26 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     )
 
             # =========================================================================
-            # 3. CÓDIGOS DE VERIFICAÇÃO / ENTRADA (DISNEY, HBO MAX, GLOBO, NETFLIX)
+            # 2. LINKS DE RESIDÊNCIA E ACESSO TEMPORÁRIO (NETFLIX)
+            # =========================================================================
+            match_netflix_residencia = re.search(
+                r'https?://[^\s<>"\'\]\);]+netflix\.com[^\s<>"\'\]\);]*(?:travel|update-primary-location|verify|household|confirm|code)[^\s<>"\'\]\);]*', 
+                corpo_processado, 
+                re.IGNORECASE
+            )
+
+            if match_netflix_residencia:
+                link_limpo = limpar_link_url(match_netflix_residencia.group(0))
+                mail.close()
+                mail.logout()
+                return (
+                    f"✅ **Link de Atualização de Residência Netflix Encontrado!**\n\n"
+                    f"🔗 Clique no link abaixo para confirmar:\n{link_limpo}\n\n"
+                    f"⏱️ *E-mail recebido há {max(1, int(diferenca_tempo.total_seconds() // 60))} minuto(s).*"
+                )
+
+            # =========================================================================
+            # 3. CÓDIGOS DE VERIFICAÇÃO / ENTRADA (MYDISNEY, HBO MAX, GLOBO, NETFLIX)
             # =========================================================================
             match_codigo_contexto = re.search(
                 r'(?:código de acesso único|use esse código de acesso|seu código de acesso|seu código único|código único|código de verificação|seu código|código:|código é|informe este código|confirmar sua identidade)[^\d]{1,100}(\d{4,8})\b', 
@@ -437,7 +444,7 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
     try:
         resultado = await asyncio.wait_for(
             loop.run_in_executor(None, extrair_codigo_imap_wrapper, dados_completos, pode_acessar_sensivel),
-            timeout=12.0
+            timeout=10.0
         )
     except asyncio.TimeoutError:
         resultado = "❌ O servidor de e-mail demorou muito a responder. Tente novamente em instantes."
@@ -463,3 +470,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
