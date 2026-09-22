@@ -32,7 +32,7 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app_flask.run(host='0.0.0.0', port=port)
 
-# --- Gerenciamento JSON ---
+# --- Gerenciamento JSON com Persistência Reforçada ---
 
 def carregar_json(caminho: str) -> dict:
     try:
@@ -182,9 +182,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
             minutos = max(1, int(diferenca_segundos // 60)) if diferenca_segundos > 0 else 1
 
-            # =========================================================================
-            # PRIORIDADE 1: CÓDIGOS NUMÉRICOS (HBO MAX, NETFLIX, DISNEY, GLOBO)
-            # =========================================================================
+            # 1. CÓDIGOS NUMÉRICOS (HBO MAX, NETFLIX, DISNEY, GLOBO)
             match_codigo_contexto = re.search(
                 r'(?:seu código único|seu código de acesso único|informe este código para entrar|informe o código abaixo|informe este código|use esse código de acesso|seu código de acesso|código único|código de verificação|seu código é|código:)[^\d]{1,100}(\d{4,8})\b', 
                 corpo_texto_puro, 
@@ -210,9 +208,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
                 )
 
-            # =========================================================================
-            # PRIORIDADE 2: NETFLIX - ATUALIZAÇÃO DE RESIDÊNCIA / "SIM, FUI EU"
-            # =========================================================================
+            # 2. NETFLIX - ATUALIZAÇÃO DE RESIDÊNCIA / "SIM, FUI EU"
             match_netflix_residencia = re.search(
                 r'https?://[^\s<>"\'\]\);]+netflix\.com[^\s<>"\'\]\);]*(?:travel|update-primary-location|verify|household|confirm|code|accountaccess)[^\s<>"\'\]\);]*', 
                 corpo_html, 
@@ -237,9 +233,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
                     )
 
-            # =========================================================================
-            # PRIORIDADE 3: LINK DE REDEFINIÇÃO DE SENHA (REQUER PERMISSÃO VIP)
-            # =========================================================================
+            # 3. LINK DE REDEFINIÇÃO DE SENHA (VIP REQUERIDO)
             match_redefinicao = (
                 re.search(r'https?://[^\s<>"\'\]\);]+netflix\.com[^\s<>"\'\]\);]*(?:password|reset-password)[^\s<>"\'\]\);]*', corpo_html, re.IGNORECASE) or
                 re.search(r'https?://[^\s<>"\'\]\);]*(?:hbomax\.com|max\.com)[^\s<>"\'\]\);]*(?:reset-password|password|token|reset|recover|alteracao)[^\s<>"\'\]\);]*', corpo_html, re.IGNORECASE) or
