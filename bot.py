@@ -84,7 +84,7 @@ def extrair_apenas_texto_visivel(html_str: str) -> str:
     texto = re.sub(r'\s+', ' ', texto)
     return texto.strip()
 
-def extrair_url_pura_href(corpo_html: str, termo_busca: str = "netflix.com") -> str:
+def extrair_url_pura_href(corpo_html: str, termo_busca: str = "http") -> str:
     if not corpo_html:
         return ""
     matches = re.findall(r'href=["\'](https?://[^"\']+)["\']', corpo_html, re.IGNORECASE)
@@ -147,6 +147,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             except Exception:
                 diferenca_segundos = 0
 
+            # Tolerância estrita de 15 minutos
             if diferenca_segundos > 1200 or diferenca_segundos < -300:
                 continue
 
@@ -183,7 +184,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
             minutos = max(1, int(diferenca_segundos // 60)) if diferenca_segundos > 0 else 1
 
-            # 1. CÓDIGOS NUMÉRICOS
+            # 1. CÓDIGOS NUMÉRICOS (HBO MAX, DISNEY, NETFLIX, GLOBO)
             match_codigo_contexto = re.search(
                 r'(?:seu código único|seu código de acesso único|informe este código para entrar|informe o código abaixo|informe este código|use esse código de acesso|seu código de acesso|código único|código de verificação|seu código é|código:)[^\d]{1,100}(\d{4,8})\b', 
                 corpo_texto_puro, 
@@ -228,14 +229,17 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
                     )
 
-            # 3. REDEFINIÇÃO DE SENHA (VIP)
-            is_assunto_redefinicao = any(t in assunto for t in ["redefinição de senha", "redefinir sua senha", "recuperar senha", "reset password", "recuperacaosenha"])
+            # 3. REDEFINIÇÃO DE SENHA (TODAS AS PLATAFORMAS / CONTA GLOBO / NETFLIX / HBO)
+            is_assunto_redefinicao = any(t in assunto for t in [
+                "recuperar sua senha", "redefinição de senha", "redefinir sua senha", 
+                "recuperar senha", "reset password", "recuperacaosenha", "alteração de senha"
+            ])
 
             if is_assunto_redefinicao:
                 if not pode_acessar_sensivel:
                     mail.close()
                     mail.logout()
-                    return "🚫 **Solicitação Não Permitida!**\n\nO seu usuário não possui permissão VIP para visualizar links de redefinição de senha."
+                    return "🚫 **Solicitação Não Permitida!**\n\nO e-mail localizado é para **redefinição/recuperação de senha** e o usuário não possui permissão VIP."
 
                 link_redefinicao = extrair_url_pura_href(corpo_html, "http")
                 if link_redefinicao:
@@ -377,7 +381,6 @@ async def listar_clientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 mensagem += f"   └ 📧 `{email_end}`\n      📅 Validade: {data_exp} ({status_dias})\n"
         mensagem += "\n"
 
-    # Divide a mensagem se for muito longa para o Telegram
     if len(mensagem) > 4000:
         for x in range(0, len(mensagem), 4000):
             await update.message.reply_text(mensagem[x:x+4000], parse_mode="Markdown")
