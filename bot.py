@@ -85,7 +85,6 @@ def extrair_apenas_texto_visivel(html_str: str) -> str:
     return texto.strip()
 
 def extrair_url_pura_href(corpo_html: str, termo_busca: str = "netflix.com") -> str:
-    """ Localiza links originais sem danificar parametros de seguranca """
     if not corpo_html:
         return ""
     matches = re.findall(r'href=["\'](https?://[^"\']+)["\']', corpo_html, re.IGNORECASE)
@@ -148,7 +147,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             except Exception:
                 diferenca_segundos = 0
 
-            # Tolerância de 15 minutos
             if diferenca_segundos > 1200 or diferenca_segundos < -300:
                 continue
 
@@ -185,9 +183,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
             minutos = max(1, int(diferenca_segundos // 60)) if diferenca_segundos > 0 else 1
 
-            # =========================================================================
-            # PRIORIDADE 1: CÓDIGOS NUMÉRICOS (HBO MAX, NETFLIX, DISNEY, GLOBO)
-            # =========================================================================
+            # 1. CÓDIGOS NUMÉRICOS
             match_codigo_contexto = re.search(
                 r'(?:seu código único|seu código de acesso único|informe este código para entrar|informe o código abaixo|informe este código|use esse código de acesso|seu código de acesso|código único|código de verificação|seu código é|código:)[^\d]{1,100}(\d{4,8})\b', 
                 corpo_texto_puro, 
@@ -213,9 +209,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
                 )
 
-            # =========================================================================
-            # PRIORIDADE 2: NETFLIX - ATUALIZAÇÃO DE RESIDÊNCIA (LINK EXATO E ÍNTEGRO)
-            # =========================================================================
+            # 2. NETFLIX RESIDÊNCIA
             eh_email_residencia = (
                 "atualizar a residência" in assunto or 
                 "atualizar a residência" in corpo_texto_puro.lower() or 
@@ -234,9 +228,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
                     )
 
-            # =========================================================================
-            # PRIORIDADE 3: LINK DE REDEFINIÇÃO DE SENHA (REQUER PERMISSÃO VIP)
-            # =========================================================================
+            # 3. REDEFINIÇÃO DE SENHA (VIP)
             is_assunto_redefinicao = any(t in assunto for t in ["redefinição de senha", "redefinir sua senha", "recuperar senha", "reset password", "recuperacaosenha"])
 
             if is_assunto_redefinicao:
@@ -283,10 +275,10 @@ from telegram.ext import (
 )
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
+    user_id = str(update.effective_user.id).strip()
     clientes = carregar_json("clientes.json")
 
-    if user_id not in clientes and user_id != str(ADMIN_ID):
+    if user_id not in clientes and user_id != str(ADMIN_ID).strip():
         clientes[user_id] = {
             "emails_permitidos": {},
             "permitir_sensivel": False
@@ -304,11 +296,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
+    if str(update.effective_user.id).strip() != str(ADMIN_ID).strip():
         return
 
     try:
-        user_id_cliente = str(context.args[0])
+        user_id_cliente = str(context.args[0]).strip()
         email_cliente = context.args[1].strip().lower()
         dias = int(context.args[2])
         
@@ -348,13 +340,57 @@ async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
 
+async def listar_clientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if str(update.effective_user.id).strip() != str(ADMIN_ID).strip():
+        return
+
+    clientes = carregar_json("clientes.json")
+    if not clientes:
+        await update.message.reply_text("📋 **Nenhum cliente cadastrado no momento.**", parse_mode="Markdown")
+        return
+
+    hoje = datetime.now().date()
+    mensagem = "📋 **Lista de Clientes Liberados:**\n\n"
+
+    for id_cliente, dados in clientes.items():
+        emails = dados.get("emails_permitidos", {})
+        vip = "Sim" if dados.get("permitir_sensivel") else "Não"
+        
+        mensagem += f"👤 **ID:** `{id_cliente}` | **VIP:** {vip}\n"
+        
+        if not emails:
+            mensagem += "   └ ⚠️ Nenhum e-mail liberado.\n"
+        else:
+            for email_end, data_exp in emails.items():
+                try:
+                    exp_date = datetime.strptime(data_exp, "%Y-%m-%d").date()
+                    dias_restantes = (exp_date - hoje).days
+                    if dias_restantes < 0:
+                        status_dias = "🛑 *Expirado*"
+                    elif dias_restantes == 0:
+                        status_dias = "⚠️ *Vence hoje*"
+                    else:
+                        status_dias = f"⏳ *Faltam {dias_restantes} dia(s)*"
+                except Exception:
+                    status_dias = "❓ Data inválida"
+
+                mensagem += f"   └ 📧 `{email_end}`\n      📅 Validade: {data_exp} ({status_dias})\n"
+        mensagem += "\n"
+
+    # Divide a mensagem se for muito longa para o Telegram
+    if len(mensagem) > 4000:
+        for x in range(0, len(mensagem), 4000):
+            await update.message.reply_text(mensagem[x:x+4000], parse_mode="Markdown")
+    else:
+        await update.message.reply_text(mensagem, parse_mode="Markdown")
+
 async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
+    user_id = str(update.effective_user.id).strip()
     texto_recebido = update.message.text.strip()
     email_original = texto_recebido.lower()
 
     clientes = carregar_json("clientes.json")
-    eh_admin = (user_id == str(ADMIN_ID))
+    eh_admin = (user_id == str(ADMIN_ID).strip())
 
     dados_cliente = clientes.get(user_id, {})
     if not eh_admin and (not dados_cliente or not dados_cliente.get("emails_permitidos")):
@@ -386,7 +422,10 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
     if not eh_admin:
         emails_permitidos = dados_cliente.get("emails_permitidos", {})
         
-        tem_acesso = "*" in emails_permitidos or email_original in emails_permitidos or normalizar_email_gmail(email_original) in [normalizar_email_gmail(e) for e in emails_permitidos.keys()]
+        email_original_norm = normalizar_email_gmail(email_original)
+        chaves_norm = [normalizar_email_gmail(k) for k in emails_permitidos.keys()]
+
+        tem_acesso = "*" in emails_permitidos or email_original in emails_permitidos or email_original_norm in chaves_norm
 
         if not tem_acesso:
             await update.message.reply_text(
@@ -399,7 +438,7 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
         data_expiracao_str = emails_permitidos.get(email_original) or emails_permitidos.get("*")
         if not data_expiracao_str:
             for k, v in emails_permitidos.items():
-                if normalizar_email_gmail(k) == normalizar_email_gmail(email_original):
+                if normalizar_email_gmail(k) == email_original_norm:
                     data_expiracao_str = v
                     break
 
@@ -448,7 +487,7 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
             timeout=15.0
         )
     except asyncio.TimeoutError:
-        resultado = "❌ O servidor de e-mail demorou muito a responder. Tente novamente em instantes."
+        resultado = "❌ O servidor de e-mail demorou muito para responder. Tente novamente em instantes."
 
     await msg_carregando.edit_text(resultado, parse_mode="Markdown")
 
@@ -461,6 +500,7 @@ def main():
 
             app.add_handler(CommandHandler("start", start))
             app.add_handler(CommandHandler("autorizar", autorizar_cliente))
+            app.add_handler(CommandHandler("listar", listar_clientes))
             app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receber_mensagem_email))
 
             print("🤖 Bot iniciado e rodando com alta estabilidade...")
