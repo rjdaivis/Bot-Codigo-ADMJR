@@ -58,7 +58,7 @@ def normalizar_email_gmail(email_str: str) -> str:
     if len(partes) != 2:
         return email_str.strip().lower()
     usuario, dominio = partes
-    if dominio == "gmail.com":
+    if dominio in ["gmail.com", "googlemail.com"]:
         usuario = usuario.split('+')[0]
         usuario = usuario.replace(".", "")
         return f"{usuario}@{dominio}"
@@ -92,7 +92,7 @@ def limpar_link_url(url: str) -> str:
     url_limpa = re.sub(r'[\]\)\}\'"\>\.,;]+$', '', url_limpa)
     return url_limpa.strip()
 
-# --- Extração IMAP Estável e Abrangente ---
+# --- Extração Cronológica Sem Preferências ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -121,7 +121,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
         id_list = messages[0].split()
         ultimos_ids = id_list[-10:]
-        ultimos_ids.reverse()
+        ultimos_ids.reverse()  # Começa da mensagem MAIS RECENTE da caixa de entrada
 
         agora = datetime.now(timezone.utc)
 
@@ -145,7 +145,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             except Exception:
                 diferenca_segundos = 0
 
-            # Tolerância estrita de 15 minutos (com margem para fuso horário de até 20 min)
+            # Tolerância estrita de 15 minutos
             if diferenca_segundos > 1200 or diferenca_segundos < -300:
                 continue
 
@@ -173,39 +173,50 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             texto_completo = (assunto + " " + remetente + " " + corpo_texto_puro).lower()
             destinatario_to = normalizar_email_gmail(str(msg.get("To", "")))
 
-            # Validação do destinatário (com suporte a pontos no Gmail)
+            # Validação do destinatário
             if email_solicitado_norm and email_solicitado_norm != email_usuario_norm:
                 if email_solicitado_norm not in normalizar_email_gmail(texto_completo) and email_solicitado_norm not in destinatario_to:
                     continue
 
-            # Ignora notificações apenas informativas de login
+            # Ignora notificações puramente informativas de novo login
             if any(termo in assunto for termo in ["novo login", "alerta de segurança", "dispositivo conectado", "new login"]):
                 continue
 
+            minutos = max(1, int(diferenca_segundos // 60)) if diferenca_segundos > 0 else 1
+
             # =========================================================================
-            # 1. NETFLIX - LINKS DE RESIDÊNCIA E ACESSO TEMPORÁRIO (BOTÃO 'RECEBER CÓDIGO')
+            # ANÁLISE COMPLETA DA MENSAGEM MAIS RECENTE (SEM PREFERÊNCIAS FORÇADAS)
             # =========================================================================
-            match_netflix_residencia = re.search(
-                r'https?://[^\s<>"\'\]\);]+netflix\.com[^\s<>"\'\]\);]*(?:travel|update-primary-location|verify|household|confirm|code|account)[^\s<>"\'\]\);]*', 
-                corpo_html, 
+
+            # 1. Busca Código Numérico no e-mail (Ex: Netflix 4410, Disney 6 dígitos, HBO 6 dígitos)
+            match_codigo_contexto = re.search(
+                r'(?:informe este código para entrar|informe o código abaixo|informe este código|seu código de acesso único|use esse código de acesso|seu código de acesso|seu código único|código único|código de verificação|seu código é|código:)[^\d]{1,100}(\d{4,8})\b', 
+                corpo_texto_puro, 
                 re.IGNORECASE
             )
 
-            if match_netflix_residencia or "solicitação de código de acesso temporário" in corpo_texto_puro.lower():
-                if match_netflix_residencia:
-                    link_limpo = limpar_link_url(match_netflix_residencia.group(0))
-                    mail.close()
-                    mail.logout()
-                    minutos = max(1, int(diferenca_segundos // 60)) if diferenca_segundos > 0 else 1
-                    return (
-                        f"✅ **Link de Acesso/Residência Netflix Encontrado!**\n\n"
-                        f"🔗 Clique no link abaixo para obter o código:\n{link_limpo}\n\n"
-                        f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
-                    )
+            # Busca secundária por blocos isolados de 4 a 6 dígitos em e-mails da Netflix ou Disney
+            match_codigo_solto = None
+            if "netflix" in remetente or "netflix" in assunto or "disney" in remetente or "disney" in assunto or "hbo" in remetente:
+                match_codigo_solto = re.search(r'\b(?!(?:19|20)\d{2}\b)\d{4,6}\b', corpo_texto_puro)
 
-            # =========================================================================
-            # 2. LINKS DE REDEFINIÇÃO DE SENHA (VIP REQUERIDO)
-            # =========================================================================
+            codigo_encontrado = None
+            if match_codigo_contexto:
+                codigo_encontrado = match_codigo_contexto.group(1)
+            elif match_codigo_solto and ("código" in assunto or "code" in assunto or "entrar" in assunto or "acesso" in assunto):
+                codigo_encontrado = match_codigo_solto.group(0)
+
+            # Se encontrou código nesta mensagem mais recente, ENTREGAR CÓDIGO
+            if codigo_encontrado:
+                mail.close()
+                mail.logout()
+                return (
+                    f"✅ **Código Encontrado!**\n\n"
+                    f"🔑 Seu código é: `{codigo_encontrado}`\n\n"
+                    f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
+                )
+
+            # 2. Busca Link de Redefinição de Senha
             match_redefinicao = (
                 re.search(r'https?://[^\s<>"\'\]\);]+netflix\.com[^\s<>"\'\]\);]*(?:password|reset)[^\s<>"\'\]\);]*', corpo_html, re.IGNORECASE) or
                 re.search(r'https?://[^\s<>"\'\]\);]*(?:hbomax\.com|max\.com)[^\s<>"\'\]\);]*(?:reset-password|password|token|reset|recover|alteracao)[^\s<>"\'\]\);]*', corpo_html, re.IGNORECASE) or
@@ -226,39 +237,26 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     link_limpo = limpar_link_url(match_redefinicao.group(0))
                     mail.close()
                     mail.logout()
-                    minutos = max(1, int(diferenca_segundos // 60)) if diferenca_segundos > 0 else 1
                     return (
                         f"✅ **Link de Redefinição de Senha Encontrado!**\n\n"
                         f"🔗 Clique no link abaixo para redefinir:\n{link_limpo}\n\n"
                         f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
                     )
 
-            # =========================================================================
-            # 3. CÓDIGOS DE ACESSO (DISNEY+, HBO MAX, GLOBO, NETFLIX PIN)
-            # =========================================================================
-            match_codigo = re.search(
-                r'(?:seu código de acesso único para o disney\+|seu código de acesso único|use esse código de acesso|seu código de acesso|seu código único|código único|código de verificação|seu código é|código:|informe este código)[^\d]{1,100}(\d{4,8})\b', 
-                corpo_texto_puro, 
+            # 3. Busca Link de Residência / Acesso Temporário Netflix (Se não houver código)
+            match_netflix_residencia = re.search(
+                r'https?://[^\s<>"\'\]\);]+netflix\.com[^\s<>"\'\]\);]*(?:travel|update-primary-location|verify|household|confirm|code|accountaccess)[^\s<>"\'\]\);]*', 
+                corpo_html, 
                 re.IGNORECASE
             )
 
-            match_disney_direto = None
-            if "disney" in remetente or "disney" in assunto:
-                match_disney_direto = re.search(r'\b(?!(?:19|20)\d{2}\b)\d{6}\b', corpo_texto_puro)
-
-            codigo_final = None
-            if match_codigo:
-                codigo_final = match_codigo.group(1)
-            elif match_disney_direto:
-                codigo_final = match_disney_direto.group(0)
-
-            if codigo_final:
+            if match_netflix_residencia:
+                link_limpo = limpar_link_url(match_netflix_residencia.group(0))
                 mail.close()
                 mail.logout()
-                minutos = max(1, int(diferenca_segundos // 60)) if diferenca_segundos > 0 else 1
                 return (
-                    f"✅ **Código de Verificação Encontrado!**\n\n"
-                    f"🔑 Seu código é: `{codigo_final}`\n\n"
+                    f"✅ **Link de Acesso/Residência Netflix Encontrado!**\n\n"
+                    f"🔗 Clique no link abaixo para obter o código:\n{link_limpo}\n\n"
                     f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
                 )
 
@@ -474,4 +472,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-            
+                                                    
