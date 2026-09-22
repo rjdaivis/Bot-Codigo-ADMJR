@@ -32,7 +32,7 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app_flask.run(host='0.0.0.0', port=port)
 
-# --- Gerenciamento JSON com Persistência Reforçada ---
+# --- Gerenciamento JSON ---
 
 def carregar_json(caminho: str) -> dict:
     try:
@@ -84,13 +84,16 @@ def extrair_apenas_texto_visivel(html_str: str) -> str:
     texto = re.sub(r'\s+', ' ', texto)
     return texto.strip()
 
-def limpar_link_url(url: str) -> str:
-    if not url:
+def extrair_url_pura_href(corpo_html: str, termo_busca: str = "netflix.com") -> str:
+    """ Localiza links originais sem danificar parametros de seguranca """
+    if not corpo_html:
         return ""
-    url_limpa = url.replace("&#x3D;", "=").replace("&amp;", "&")
-    url_limpa = re.sub(r'#x3D;?$', '=', url_limpa, flags=re.IGNORECASE)
-    url_limpa = re.sub(r'[\]\)\}\'"\>\.,;]+$', '', url_limpa)
-    return url_limpa.strip()
+    matches = re.findall(r'href=["\'](https?://[^"\']+)["\']', corpo_html, re.IGNORECASE)
+    for link in matches:
+        if termo_busca in link.lower() and not any(x in link.lower() for x in ["unsubscribe", "help", "privacy", "terms"]):
+            link_limpo = link.replace("&#x3D;", "=").replace("&amp;", "&")
+            return link_limpo.strip()
+    return ""
 
 # --- Extração IMAP Cronológica Unificada ---
 
@@ -145,7 +148,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             except Exception:
                 diferenca_segundos = 0
 
-            # Tolerância estrita de 15 minutos
+            # Tolerância de 15 minutos
             if diferenca_segundos > 1200 or diferenca_segundos < -300:
                 continue
 
@@ -182,7 +185,9 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
             minutos = max(1, int(diferenca_segundos // 60)) if diferenca_segundos > 0 else 1
 
-            # 1. CÓDIGOS NUMÉRICOS (HBO MAX, NETFLIX, DISNEY, GLOBO)
+            # =========================================================================
+            # PRIORIDADE 1: CÓDIGOS NUMÉRICOS (HBO MAX, NETFLIX, DISNEY, GLOBO)
+            # =========================================================================
             match_codigo_contexto = re.search(
                 r'(?:seu código único|seu código de acesso único|informe este código para entrar|informe o código abaixo|informe este código|use esse código de acesso|seu código de acesso|código único|código de verificação|seu código é|código:)[^\d]{1,100}(\d{4,8})\b', 
                 corpo_texto_puro, 
@@ -208,13 +213,9 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
                 )
 
-            # 2. NETFLIX - ATUALIZAÇÃO DE RESIDÊNCIA / "SIM, FUI EU"
-            match_netflix_residencia = re.search(
-                r'https?://[^\s<>"\'\]\);]+netflix\.com[^\s<>"\'\]\);]*(?:travel|update-primary-location|verify|household|confirm|code|accountaccess)[^\s<>"\'\]\);]*', 
-                corpo_html, 
-                re.IGNORECASE
-            )
-
+            # =========================================================================
+            # PRIORIDADE 2: NETFLIX - ATUALIZAÇÃO DE RESIDÊNCIA (LINK EXATO E ÍNTEGRO)
+            # =========================================================================
             eh_email_residencia = (
                 "atualizar a residência" in assunto or 
                 "atualizar a residência" in corpo_texto_puro.lower() or 
@@ -222,41 +223,35 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 "solicitação para atualizar a residência netflix" in corpo_texto_puro.lower()
             )
 
-            if match_netflix_residencia or eh_email_residencia:
-                if match_netflix_residencia:
-                    link_limpo = limpar_link_url(match_netflix_residencia.group(0))
+            if eh_email_residencia:
+                link_netflix = extrair_url_pura_href(corpo_html, "netflix.com")
+                if link_netflix:
                     mail.close()
                     mail.logout()
                     return (
                         f"✅ **Link de Atualização de Residência Netflix Encontrado!**\n\n"
-                        f"🔗 Clique no link abaixo para confirmar:\n{link_limpo}\n\n"
+                        f"🔗 Clique no link abaixo para confirmar:\n{link_netflix}\n\n"
                         f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
                     )
 
-            # 3. LINK DE REDEFINIÇÃO DE SENHA (VIP REQUERIDO)
-            match_redefinicao = (
-                re.search(r'https?://[^\s<>"\'\]\);]+netflix\.com[^\s<>"\'\]\);]*(?:password|reset-password)[^\s<>"\'\]\);]*', corpo_html, re.IGNORECASE) or
-                re.search(r'https?://[^\s<>"\'\]\);]*(?:hbomax\.com|max\.com)[^\s<>"\'\]\);]*(?:reset-password|password|token|reset|recover|alteracao)[^\s<>"\'\]\);]*', corpo_html, re.IGNORECASE) or
-                re.search(r'https?://[^\s<>"\'\]\);]*globo\.com[^\s<>"\'\]\);]*(?:recuperacaoSenha|recuperacao|senha|login|token)[^\s<>"\'\]\);]*', corpo_html, re.IGNORECASE) or
-                re.search(r'https?://[^\s<>"\'\]\);]*paramountplus\.com[^\s<>"\'\]\);]*(?:reset-password|password|token|reset)[^\s<>"\'\]\);]*', corpo_html, re.IGNORECASE) or
-                re.search(r'https?://[^\s<>"\'\]\);]+(?:recuperacaosenha|reset-password|password-reset)[^\s<>"\'\]\);]*', corpo_html, re.IGNORECASE)
-            )
-
+            # =========================================================================
+            # PRIORIDADE 3: LINK DE REDEFINIÇÃO DE SENHA (REQUER PERMISSÃO VIP)
+            # =========================================================================
             is_assunto_redefinicao = any(t in assunto for t in ["redefinição de senha", "redefinir sua senha", "recuperar senha", "reset password", "recuperacaosenha"])
 
-            if is_assunto_redefinicao or match_redefinicao:
+            if is_assunto_redefinicao:
                 if not pode_acessar_sensivel:
                     mail.close()
                     mail.logout()
                     return "🚫 **Solicitação Não Permitida!**\n\nO seu usuário não possui permissão VIP para visualizar links de redefinição de senha."
 
-                if match_redefinicao:
-                    link_limpo = limpar_link_url(match_redefinicao.group(0))
+                link_redefinicao = extrair_url_pura_href(corpo_html, "http")
+                if link_redefinicao:
                     mail.close()
                     mail.logout()
                     return (
                         f"✅ **Link de Redefinição de Senha Encontrado!**\n\n"
-                        f"🔗 Clique no link abaixo para redefinir:\n{link_limpo}\n\n"
+                        f"🔗 Clique no link abaixo para redefinir:\n{link_redefinicao}\n\n"
                         f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
                     )
 
