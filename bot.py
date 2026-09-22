@@ -92,7 +92,7 @@ def limpar_link_url(url: str) -> str:
     url_limpa = re.sub(r'[\]\)\}\'"\>\.,;]+$', '', url_limpa)
     return url_limpa.strip()
 
-# --- Extração IMAP Cronológica ---
+# --- Extração IMAP Cronológica Unificada ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -183,22 +183,22 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             minutos = max(1, int(diferenca_segundos // 60)) if diferenca_segundos > 0 else 1
 
             # =========================================================================
-            # PRIORIDADE 1: CÓDIGOS NUMÉRICOS (4 a 8 DÍGITOS)
+            # PRIORIDADE 1: CÓDIGOS NUMÉRICOS (HBO MAX, NETFLIX, DISNEY, GLOBO)
             # =========================================================================
             match_codigo_contexto = re.search(
-                r'(?:informe este código para entrar|informe o código abaixo|informe este código|seu código de acesso único|use esse código de acesso|seu código de acesso|seu código único|código único|código de verificação|seu código é|código:)[^\d]{1,100}(\d{4,8})\b', 
+                r'(?:seu código único|seu código de acesso único|informe este código para entrar|informe o código abaixo|informe este código|use esse código de acesso|seu código de acesso|código único|código de verificação|seu código é|código:)[^\d]{1,100}(\d{4,8})\b', 
                 corpo_texto_puro, 
                 re.IGNORECASE
             )
 
             match_codigo_solto = None
-            if any(k in remetente or k in assunto for k in ["netflix", "disney", "hbo", "globo"]):
+            if any(k in remetente or k in assunto for k in ["hbomax", "max", "netflix", "disney", "globo"]):
                 match_codigo_solto = re.search(r'\b(?!(?:19|20)\d{2}\b)\d{4,6}\b', corpo_texto_puro)
 
             codigo_encontrado = None
             if match_codigo_contexto:
                 codigo_encontrado = match_codigo_contexto.group(1)
-            elif match_codigo_solto and ("código" in assunto or "code" in assunto or "entrar" in assunto or "acesso" in assunto):
+            elif match_codigo_solto and any(k in assunto for k in ["código", "code", "entrar", "acesso", "temporário"]):
                 codigo_encontrado = match_codigo_solto.group(0)
 
             if codigo_encontrado:
@@ -211,7 +211,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 )
 
             # =========================================================================
-            # PRIORIDADE 2: NETFLIX - ATUALIZAÇÃO DE RESIDÊNCIA / "SIM, FUI EU" (LIBERAÇÃO LIVRE)
+            # PRIORIDADE 2: NETFLIX - ATUALIZAÇÃO DE RESIDÊNCIA / "SIM, FUI EU"
             # =========================================================================
             match_netflix_residencia = re.search(
                 r'https?://[^\s<>"\'\]\);]+netflix\.com[^\s<>"\'\]\);]*(?:travel|update-primary-location|verify|household|confirm|code|accountaccess)[^\s<>"\'\]\);]*', 
@@ -342,7 +342,6 @@ async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if "emails_permitidos" not in clientes[user_id_cliente]:
             clientes[user_id_cliente]["emails_permitidos"] = {}
 
-        # Guarda múltiplos e-mails acumulativamente para o mesmo cliente
         clientes[user_id_cliente]["emails_permitidos"][email_cliente] = data_validade
         salvar_json("clientes.json", clientes)
 
