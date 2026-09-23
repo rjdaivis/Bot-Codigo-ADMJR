@@ -64,13 +64,11 @@ def carregar_json(caminho: str) -> dict:
     except Exception as e:
         logging.error(f"Erro ao carregar {caminho}: {e}")
 
-    # Mescla clientes fixos do código para garantir que NUNCA sejam perdidos
     if caminho == "clientes.json":
         for id_fixo, info_fixa in CLIENTES_FIXOS_PADRAO.items():
             if id_fixo not in dados:
                 dados[id_fixo] = info_fixa
             else:
-                # Mantém emails permitidos adicionados sem sobrescrever
                 for em, val in info_fixa.get("emails_permitidos", {}).items():
                     if "emails_permitidos" not in dados[id_fixo]:
                         dados[id_fixo]["emails_permitidos"] = {}
@@ -143,7 +141,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
     mail = None
     try:
-        socket.setdefaulttimeout(10)
+        socket.setdefaulttimeout(6)
         mail = imaplib.IMAP4_SSL(host, porta)
         mail.login(email_usuario, senha)
         
@@ -182,6 +180,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             except Exception:
                 diferenca_segundos = 0
 
+            # Tolerância de 15 minutos (com pequena folga para fuso horário de servidores)
             if diferenca_segundos > 1200 or diferenca_segundos < -300:
                 continue
 
@@ -218,7 +217,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
             minutos = max(1, int(diferenca_segundos // 60)) if diferenca_segundos > 0 else 1
 
-            # 1. SEGURANÇA VIP (TROCA DE SENHA/DADOS)
+            # 1. SEGURANÇA VIP (TROCA DE SENHA)
             eh_sensivel_vip = (
                 "link para alteração de senha" in assunto or
                 "clique para recuperar sua senha" in assunto or
@@ -254,14 +253,16 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
                     )
 
-            # 2. NETFLIX - RESIDÊNCIA E ACESSO TEMPORÁRIO
+            # 2. NETFLIX RESIDÊNCIA E ACESSO TEMPORÁRIO
             eh_email_residencia = (
+                "como atualizar sua residência" in assunto or
+                "atualizar sua residência" in assunto or
                 "código de acesso temporário" in assunto or
                 "código de acesso temporário" in corpo_texto_puro.lower() or
-                "atualizar a residência" in assunto or 
                 "atualizar a residência" in corpo_texto_puro.lower() or 
                 "sim, fui eu" in corpo_texto_puro.lower() or
-                "solicitação para atualizar a residência netflix" in corpo_texto_puro.lower()
+                "solicitação para atualizar a residência netflix" in corpo_texto_puro.lower() or
+                "você pediu para atualizar sua residência" in corpo_texto_puro.lower()
             )
 
             if eh_email_residencia:
@@ -275,7 +276,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
                     )
 
-            # 3. CÓDIGOS NUMÉRICOS DE ACESSO DIRETO
+            # 3. CÓDIGOS NUMÉRICOS DE ACESSO
             match_codigo_contexto = re.search(
                 r'(?:confirme sua identidade com o código|use este código para confirmar|seu código único|seu código de acesso único|informe este código para entrar|informe o código abaixo|informe este código|use esse código de acesso|seu código de acesso|código único|código de verificação|seu código é|código:)[^\d]{1,100}(\d{4,8})\b', 
                 corpo_texto_puro, 
@@ -306,7 +307,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
         return "⚠️ Nenhum e-mail recente (últimos 15 minutos) com código ou link válido foi localizado nesta caixa."
 
     except socket.timeout:
-        return "❌ O servidor de e-mail demorou muito para responder (Timeout). Tente novamente em instantes."
+        return "❌ O servidor de e-mail demorou para responder. Tente novamente em alguns segundos."
     except Exception as e:
         logging.error(f"Erro IMAP: {e}")
         return "❌ Erro de conexão com a caixa de e-mail. Verifique as credenciais no contas.json."
@@ -537,10 +538,10 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
     try:
         resultado = await asyncio.wait_for(
             loop.run_in_executor(None, extrair_codigo_imap_wrapper, dados_completos, pode_acessar_sensivel),
-            timeout=15.0
+            timeout=10.0
         )
     except asyncio.TimeoutError:
-        resultado = "❌ O servidor de e-mail demorou muito para responder. Tente novamente em instantes."
+        resultado = "❌ O servidor de e-mail demorou muito a responder. Tente novamente em instantes."
 
     await msg_carregando.edit_text(resultado, parse_mode="Markdown")
 
