@@ -94,7 +94,7 @@ def extrair_url_pura_href(corpo_html: str, termo_busca: str = "http") -> str:
             return link_limpo.strip()
     return ""
 
-# --- Extração IMAP Cronológica Unificada ---
+# --- Extração IMAP Cronológica Sem Priorização Indevida ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -184,9 +184,52 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
             minutos = max(1, int(diferenca_segundos // 60)) if diferenca_segundos > 0 else 1
 
-            # 1. CÓDIGOS NUMÉRICOS (HBO MAX, DISNEY, NETFLIX, GLOBO)
+            # =========================================================================
+            # E-MAILS DE LISTA NEGRA (EXCLUSIVOS PARA VIP - SENHAS E ALTERAÇÃO DE DADOS)
+            # =========================================================================
+            eh_sensivel_vip = (
+                "link para alteração de senha" in assunto or
+                "clique para recuperar sua senha" in assunto or
+                "confirme a alteração da sua conta com este código" in corpo_texto_puro.lower() or
+                "redefinir senha" in assunto or "redefinir senha" in corpo_texto_puro.lower() or
+                "restabelecer senha" in corpo_texto_puro.lower() or
+                "recuperar senha" in corpo_texto_puro.lower() or
+                "recuperaçaosenha" in corpo_html.lower() or
+                "reset-password" in corpo_html.lower()
+            )
+
+            if eh_sensivel_vip:
+                if not pode_acessar_sensivel:
+                    mail.close()
+                    mail.logout()
+                    return "🚫 **Solicitação Não Permitida!**\n\nEste e-mail trata de redefinição de senha ou alteração de dados e requer permissão VIP."
+
+                # Se for VIP, extrai e envia o link de redefinição ou código
+                link_vip = extrair_url_pura_href(corpo_html, "http")
+                match_cod_vip = re.search(r'\b(?!(?:19|20)\d{2}\b)\d{4,8}\b', corpo_texto_puro)
+                
+                mail.close()
+                mail.logout()
+                if link_vip:
+                    return (
+                        f"✅ **Link de Redefinição de Senha Encontrado!**\n\n"
+                        f"🔗 Clique no link abaixo para redefinir:\n{link_vip}\n\n"
+                        f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
+                    )
+                elif match_cod_vip:
+                    return (
+                        f"✅ **Código de Alteração Encontrado!**\n\n"
+                        f"🔑 Seu código é: `{match_cod_vip.group(0)}`\n\n"
+                        f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
+                    )
+
+            # =========================================================================
+            # CONTEÚDOS LIBERADOS PARA CLIENTES NORMAIS (SEM LISTA NEGRA)
+            # =========================================================================
+
+            # 1. Busca Código Numérico Válido (Evita pegar IDs e datas)
             match_codigo_contexto = re.search(
-                r'(?:seu código único|seu código de acesso único|informe este código para entrar|informe o código abaixo|informe este código|use esse código de acesso|seu código de acesso|código único|código de verificação|seu código é|código:)[^\d]{1,100}(\d{4,8})\b', 
+                r'(?:confirme sua identidade com o código|use este código para confirmar|seu código único|seu código de acesso único|informe este código para entrar|informe o código abaixo|informe este código|use esse código de acesso|seu código de acesso|código único|código de verificação|seu código é|código:)[^\d]{1,100}(\d{4,8})\b', 
                 corpo_texto_puro, 
                 re.IGNORECASE
             )
@@ -198,7 +241,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             codigo_encontrado = None
             if match_codigo_contexto:
                 codigo_encontrado = match_codigo_contexto.group(1)
-            elif match_codigo_solto and any(k in assunto for k in ["código", "code", "entrar", "acesso", "temporário"]):
+            elif match_codigo_solto and any(k in assunto for k in ["código", "code", "entrar", "acesso", "temporário", "confirme"]):
                 codigo_encontrado = match_codigo_solto.group(0)
 
             if codigo_encontrado:
@@ -210,7 +253,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
                 )
 
-            # 2. NETFLIX RESIDÊNCIA
+            # 2. Busca Link de Residência Netflix ("Sim, fui eu" / "Receber código")
             eh_email_residencia = (
                 "atualizar a residência" in assunto or 
                 "atualizar a residência" in corpo_texto_puro.lower() or 
@@ -226,28 +269,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     return (
                         f"✅ **Link de Atualização de Residência Netflix Encontrado!**\n\n"
                         f"🔗 Clique no link abaixo para confirmar:\n{link_netflix}\n\n"
-                        f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
-                    )
-
-            # 3. REDEFINIÇÃO DE SENHA (TODAS AS PLATAFORMAS / CONTA GLOBO / NETFLIX / HBO)
-            is_assunto_redefinicao = any(t in assunto for t in [
-                "recuperar sua senha", "redefinição de senha", "redefinir sua senha", 
-                "recuperar senha", "reset password", "recuperacaosenha", "alteração de senha"
-            ])
-
-            if is_assunto_redefinicao:
-                if not pode_acessar_sensivel:
-                    mail.close()
-                    mail.logout()
-                    return "🚫 **Solicitação Não Permitida!**\n\nO e-mail localizado é para **redefinição/recuperação de senha** e o usuário não possui permissão VIP."
-
-                link_redefinicao = extrair_url_pura_href(corpo_html, "http")
-                if link_redefinicao:
-                    mail.close()
-                    mail.logout()
-                    return (
-                        f"✅ **Link de Redefinição de Senha Encontrado!**\n\n"
-                        f"🔗 Clique no link abaixo para redefinir:\n{link_redefinicao}\n\n"
                         f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
                     )
 
