@@ -10,6 +10,7 @@ import html
 import quopri
 import time
 from threading import Thread
+from concurrent.futures import ThreadPoolExecutor
 from flask import Flask
 from email.utils import parsedate_to_datetime
 from datetime import datetime, timezone, timedelta
@@ -21,6 +22,8 @@ logging.basicConfig(
 
 TOKEN_TELEGRAM = os.environ.get("TOKEN_TELEGRAM", "SEU_TOKEN_AQUI")
 ADMIN_ID = 7496198484  # ID do Administrador
+
+executor = ThreadPoolExecutor(max_workers=5)
 
 # --- BASE FIXA DE CLIENTES QUE NUNCA SERÃO APAGADOS EM REINÍCIOS OU DEPLOYS ---
 CLIENTES_FIXOS_PADRAO = {
@@ -139,7 +142,7 @@ def extrair_url_pura_href(corpo_html: str, termo_busca: str = "http") -> str:
             return link_limpo.strip()
     return ""
 
-# --- Extração IMAP Direta ---
+# --- Extração IMAP Direta com Timeout Curto e Seguro ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -153,7 +156,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
     mail = None
     try:
-        socket.setdefaulttimeout(8)
+        socket.setdefaulttimeout(5)
         mail = imaplib.IMAP4_SSL(host, porta)
         mail.login(email_usuario, senha)
         
@@ -220,7 +223,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             texto_completo = (assunto + " " + remetente + " " + corpo_texto_puro).lower()
             destinatario_to_norm = normalizar_email_gmail(str(msg.get("To", "")))
 
-            # Comparação flexível e normalizada de e-mails para ignorar variação de pontos do Gmail
             if email_solicitado_norm and email_solicitado_norm != email_usuario_norm:
                 if email_solicitado_norm not in normalizar_email_gmail(texto_completo) and email_solicitado_norm not in destinatario_to_norm:
                     continue
@@ -266,7 +268,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
                     )
 
-            # 2. NETFLIX RESIDÊNCIA E ACESSO TEMPORÁRIO
+            # 2. NETFLIX - RESIDÊNCIA E ACESSO TEMPORÁRIO
             eh_email_residencia = (
                 "você pediu para atualizar sua residência" in assunto or
                 "você pediu para atualizar sua residência" in corpo_texto_puro.lower() or
@@ -290,7 +292,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
                     )
 
-            # 3. CÓDIGOS NUMÉRICOS DE ACESSO (HBO MAX, DISNEY, NETFLIX, GLOBO)
+            # 3. CÓDIGOS NUMÉRICOS DE ACESSO
             match_codigo_contexto = re.search(
                 r'(?:confirme sua identidade com o código|use este código para confirmar|seu código único|seu código de acesso único|informe este código para entrar|informe o código abaixo|informe este código|use esse código de acesso|seu código de acesso|código único|código de verificação|seu código é|código:)[^\d]{1,100}(\d{4,8})\b', 
                 corpo_texto_puro, 
@@ -550,12 +552,15 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
 
     loop = asyncio.get_running_loop()
     try:
-        resultado = await loop.run_in_executor(None, extrair_codigo_imap_wrapper, dados_completos, pode_acessar_sensivel)
+        resultado = await loop.run_in_executor(executor, extrair_codigo_imap_wrapper, dados_completos, pode_acessar_sensivel)
     except Exception as err:
         logging.error(f"Erro na execução da busca: {err}")
         resultado = "❌ Ocorreu uma falha temporária ao consultar a caixa de e-mail. Tente novamente em alguns segundos."
 
-    await msg_carregando.edit_text(resultado, parse_mode="Markdown")
+    try:
+        await msg_carregando.edit_text(resultado, parse_mode="Markdown")
+    except Exception as e:
+        logging.error(f"Erro ao editar mensagem no Telegram: {e}")
 
 def main():
     Thread(target=run_flask, daemon=True).start()
