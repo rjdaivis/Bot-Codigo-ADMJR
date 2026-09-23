@@ -20,9 +20,8 @@ logging.basicConfig(
 )
 
 TOKEN_TELEGRAM = os.environ.get("TOKEN_TELEGRAM", "SEU_TOKEN_AQUI")
-ADMIN_ID = 7496198484  # ID do Administrador
+ADMIN_ID = 7496198484
 
-# --- BASE FIXA DE CLIENTES QUE NUNCA SERÃO APAGADOS EM REINÍCIOS OU DEPLOYS ---
 CLIENTES_FIXOS_PADRAO = {
     "7496198484": {
         "emails_permitidos": {"*": "2030-12-31"},
@@ -66,13 +65,11 @@ app_flask = Flask('')
 
 @app_flask.route('/')
 def home():
-    return "Bot de Códigos 100% Ativo e Online"
+    return "Bot Online e Estável"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app_flask.run(host='0.0.0.0', port=port)
-
-# --- Gerenciamento JSON ---
 
 def carregar_json(caminho: str) -> dict:
     dados = {}
@@ -146,8 +143,6 @@ def extrair_url_pura_href(corpo_html: str, termo_busca: str = "http") -> str:
             return link_limpo.strip()
     return ""
 
-# --- Extração IMAP Rápida ---
-
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
     host = dados_conta.get("host_imap", "imap.gmail.com")
@@ -160,21 +155,19 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
     mail = None
     try:
-        socket.setdefaulttimeout(4)
+        socket.setdefaulttimeout(10)
         mail = imaplib.IMAP4_SSL(host, porta)
         mail.login(email_usuario, senha)
-        
         mail.select("INBOX")
 
         status, messages = mail.search(None, "ALL")
-
         if status != "OK" or not messages[0]:
             mail.close()
             mail.logout()
             return "⚠️ Nenhum e-mail encontrado na caixa de entrada."
 
         id_list = messages[0].split()
-        ultimos_ids = id_list[-10:]
+        ultimos_ids = id_list[-15:]
         ultimos_ids.reverse()
 
         agora = datetime.now(timezone.utc)
@@ -185,7 +178,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 continue
 
             msg = email.message_from_bytes(data_body[0][1])
-
             data_email_header = msg.get("Date")
             if not data_email_header:
                 continue
@@ -194,13 +186,11 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 data_email = parsedate_to_datetime(data_email_header)
                 if data_email.tzinfo is None:
                     data_email = data_email.replace(tzinfo=timezone.utc)
-                
                 diferenca_segundos = (agora - data_email).total_seconds()
             except Exception:
                 diferenca_segundos = 0
 
-            # Tolerância estrita de 15 minutos
-            if diferenca_segundos > 1200 or diferenca_segundos < -300:
+            if diferenca_segundos > 1800 or diferenca_segundos < -300:
                 continue
 
             assunto = str(msg.get("Subject", "")).lower()
@@ -231,28 +221,19 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 if email_solicitado_norm not in normalizar_email_gmail(texto_completo) and email_solicitado_norm not in destinatario_to_norm:
                     continue
 
-            if any(termo in assunto for termo in ["novo login", "alerta de segurança", "dispositivo conectado", "new login"]):
-                continue
-
             minutos = max(1, int(diferenca_segundos // 60)) if diferenca_segundos > 0 else 1
 
-            # 1. SEGURANÇA VIP (TROCA DE SENHA)
+            # REDEFINIÇÃO DE SENHA
             eh_sensivel_vip = (
-                "link para alteração de senha" in assunto or
-                "clique para recuperar sua senha" in assunto or
-                "confirme a alteração da sua conta com este código" in corpo_texto_puro.lower() or
                 "redefinir senha" in assunto or "redefinir senha" in corpo_texto_puro.lower() or
-                "restabelecer senha" in corpo_texto_puro.lower() or
-                "recuperar senha" in corpo_texto_puro.lower() or
-                "recuperaçaosenha" in corpo_html.lower() or
-                "reset-password" in corpo_html.lower()
+                "recuperar senha" in corpo_texto_puro.lower() or "reset-password" in corpo_html.lower()
             )
 
             if eh_sensivel_vip:
                 if not pode_acessar_sensivel:
                     mail.close()
                     mail.logout()
-                    return "🚫 **Solicitação Não Permitida!**\n\nEste e-mail trata de redefinição de senha ou alteração de dados e requer permissão VIP."
+                    return "🚫 **Solicitação Não Permitida!**\n\nEste e-mail trata de redefinição de senha ou alteração de dados."
 
                 link_vip = extrair_url_pura_href(corpo_html, "http")
                 match_cod_vip = re.search(r'\b(?!(?:19|20)\d{2}\b)\d{4,8}\b', corpo_texto_puro)
@@ -260,32 +241,15 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 mail.close()
                 mail.logout()
                 if link_vip:
-                    return (
-                        f"✅ **Link de Redefinição de Senha Encontrado!**\n\n"
-                        f"🔗 Clique no link abaixo para redefinir:\n{link_vip}\n\n"
-                        f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
-                    )
+                    return f"✅ **Link de Redefinição Encontrado!**\n\n🔗 Link:\n{link_vip}\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
                 elif match_cod_vip:
-                    return (
-                        f"✅ **Código de Alteração Encontrado!**\n\n"
-                        f"🔑 Seu código é: `{match_cod_vip.group(0)}`\n\n"
-                        f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
-                    )
+                    return f"✅ **Código de Redefinição Encontrado!**\n\n🔑 Código: `{match_cod_vip.group(0)}`\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
 
-            # 2. NETFLIX RESIDÊNCIA E ACESSO TEMPORÁRIO
+            # NETFLIX RESIDÊNCIA E CÓDIGOS TEMPORÁRIOS
             eh_email_residencia = (
-                "acesso temporário" in assunto or
-                "acesso temporário" in corpo_texto_puro.lower() or
-                "você pediu para atualizar sua residência" in assunto or
-                "você pediu para atualizar sua residência" in corpo_texto_puro.lower() or
-                "código de acesso temporário" in assunto or
-                "código de acesso temporário" in corpo_texto_puro.lower() or
-                "como atualizar sua residência" in assunto or
-                "atualizar sua residência" in assunto or
-                "atualizar a residência" in corpo_texto_puro.lower() or 
-                "sim, fui eu" in corpo_texto_puro.lower() or
-                "receber código" in corpo_texto_puro.lower() or
-                "solicitação para atualizar a residência netflix" in corpo_texto_puro.lower()
+                "acesso temporário" in assunto or "acesso temporário" in corpo_texto_puro.lower() or
+                "atualizar sua residência" in assunto or "atualizar a residência" in corpo_texto_puro.lower() or 
+                "sim, fui eu" in corpo_texto_puro.lower() or "receber código" in corpo_texto_puro.lower()
             )
 
             if eh_email_residencia:
@@ -293,55 +257,29 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 if link_netflix:
                     mail.close()
                     mail.logout()
-                    return (
-                        f"✅ **Link de Acesso Temporário / Residência Netflix Encontrado!**\n\n"
-                        f"🔗 Clique no link abaixo para obter o código:\n{link_netflix}\n\n"
-                        f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
-                    )
+                    return f"✅ **Link Netflix Encontrado!**\n\n🔗 Clique abaixo para liberar:\n{link_netflix}\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
 
-            # 3. CÓDIGOS NUMÉRICOS DE ACESSO
-            match_codigo_contexto = re.search(
-                r'(?:confirme sua identidade com o código|use este código para confirmar|seu código único|seu código de acesso único|informe este código para entrar|informe o código abaixo|informe este código|use esse código de acesso|seu código de acesso|código único|código de verificação|seu código é|código:)[^\d]{1,100}(\d{4,8})\b', 
-                corpo_texto_puro, 
-                re.IGNORECASE
-            )
-
-            match_codigo_solto = None
-            if any(k in remetente or k in assunto for k in ["hbomax", "max", "netflix", "disney", "globo"]):
-                match_codigo_solto = re.search(r'\b(?!(?:19|20)\d{2}\b)\d{4,6}\b', corpo_texto_puro)
-
-            codigo_encontrado = None
-            if match_codigo_contexto:
-                codigo_encontrado = match_codigo_contexto.group(1)
-            elif match_codigo_solto and any(k in assunto for k in ["código", "code", "entrar", "acesso", "temporário", "confirme"]):
+            # CÓDIGOS NUMÉRICO GERAIS (HBO MAX, DISNEY, GLOBO, ETC)
+            match_codigo_solto = re.search(r'\b(?!(?:19|20)\d{2}\b)\d{4,6}\b', corpo_texto_puro)
+            if match_codigo_solto:
                 codigo_encontrado = match_codigo_solto.group(0)
-
-            if codigo_encontrado:
                 mail.close()
                 mail.logout()
-                return (
-                    f"✅ **Código Encontrado!**\n\n"
-                    f"🔑 Seu código é: `{codigo_encontrado}`\n\n"
-                    f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
-                )
+                return f"✅ **Código Encontrado!**\n\n🔑 Seu código é: `{codigo_encontrado}`\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
 
         mail.close()
         mail.logout()
-        return "⚠️ Nenhum e-mail recente (últimos 15 minutos) com código ou link válido foi localizado nesta caixa."
+        return "⚠️ Nenhum e-mail recente (últimos 30 minutos) com código ou link válido foi localizado."
 
-    except socket.timeout:
-        return "❌ O servidor de e-mail demorou para responder. Tente novamente em instantes."
     except Exception as e:
         logging.error(f"Erro IMAP: {e}")
-        return "❌ Erro de conexão com a caixa de e-mail. Verifique as credenciais no contas.json."
+        return "❌ O servidor de e-mail demorou para responder ou recusou a conexão. Tente novamente em instantes."
     finally:
         try:
             if mail:
                 mail.logout()
         except Exception:
             pass
-
-# --- Handlers Telegram ---
 
 from telegram import Update
 from telegram.ext import (
@@ -357,175 +295,39 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     clientes = carregar_json("clientes.json")
 
     if user_id not in clientes and user_id != str(ADMIN_ID).strip():
-        clientes[user_id] = {
-            "emails_permitidos": {},
-            "permitir_sensivel": False
-        }
+        clientes[user_id] = {"emails_permitidos": {}, "permitir_sensivel": False}
         salvar_json("clientes.json", clientes)
 
     await update.message.reply_text(
-        f"👋 **Central de Liberação de Códigos**\n\n"
-        f"🆔 **Seu ID do Telegram:** `{user_id}`\n\n"
-        f"📍 **Se for o seu primeiro acesso:**\n"
-        f"Envie o seu ID (`{user_id}`) ao **Suporte ADM JR** para liberar a sua assinatura no sistema.\n\n"
-        f"✉️ **Já possui assinatura ativa?**\n"
-        f"Basta digitar o **e-mail do seu login** abaixo para buscar o código/link recebido nos últimos 15 minutos.",
+        f"👋 **Central de Liberação de Códigos**\n\n🆔 **Seu ID:** `{user_id}`\n\nEnvie o e-mail cadastrado para buscar códigos recentes.",
         parse_mode="Markdown"
     )
 
-async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if str(update.effective_user.id).strip() != str(ADMIN_ID).strip():
-        return
-
-    try:
-        user_id_cliente = str(context.args[0]).strip()
-        email_cliente = context.args[1].strip().lower()
-        dias = int(context.args[2])
-        
-        liberar_sensivel = False
-        if len(context.args) > 3 and context.args[3].lower() in ["vip", "sensivel", "true", "todos", "sim"]:
-            liberar_sensivel = True
-
-        clientes = carregar_json("clientes.json")
-        data_validade = (datetime.now() + timedelta(days=dias)).strftime("%Y-%m-%d")
-
-        if user_id_cliente not in clientes:
-            clientes[user_id_cliente] = {
-                "emails_permitidos": {},
-                "permitir_sensivel": liberar_sensivel
-            }
-        else:
-            if liberar_sensivel:
-                clientes[user_id_cliente]["permitir_sensivel"] = True
-
-        if "emails_permitidos" not in clientes[user_id_cliente]:
-            clientes[user_id_cliente]["emails_permitidos"] = {}
-
-        clientes[user_id_cliente]["emails_permitidos"][email_cliente] = data_validade
-        salvar_json("clientes.json", clientes)
-
-        msg_vip = " (Acesso Total + Links de Redefinição)" if clientes[user_id_cliente].get("permitir_sensivel") else ""
-        await update.message.reply_text(
-            f"✅ **Acesso Concedido!**\n\n"
-            f"👤 **ID Cliente:** `{user_id_cliente}`\n"
-            f"📧 **E-mail Liberado:** `{email_cliente}`\n"
-            f"📅 **Válido até:** {data_validade} ({dias} dias){msg_vip}",
-            parse_mode="Markdown"
-        )
-    except Exception:
-        await update.message.reply_text(
-            "⚠️ **Uso correto:** `/autorizar ID_CLIENTE EMAIL DIAS [vip]`",
-            parse_mode="Markdown"
-        )
-
-async def listar_clientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if str(update.effective_user.id).strip() != str(ADMIN_ID).strip():
-        return
-
-    clientes = carregar_json("clientes.json")
-    if not clientes:
-        await update.message.reply_text("📋 **Nenhum cliente cadastrado no momento.**", parse_mode="Markdown")
-        return
-
-    hoje = datetime.now().date()
-    mensagem = "📋 **Lista de Clientes Liberados:**\n\n"
-
-    for id_cliente, dados in clientes.items():
-        emails = dados.get("emails_permitidos", {})
-        vip = "Sim" if dados.get("permitir_sensivel") else "Não"
-        
-        mensagem += f"👤 **ID:** `{id_cliente}` | **VIP:** {vip}\n"
-        
-        if not emails:
-            mensagem += "   └ ⚠️ Nenhum e-mail liberado.\n"
-        else:
-            for email_end, data_exp in emails.items():
-                try:
-                    exp_date = datetime.strptime(data_exp, "%Y-%m-%d").date()
-                    dias_restantes = (exp_date - hoje).days
-                    if dias_restantes < 0:
-                        status_dias = "🛑 *Expirado*"
-                    elif dias_restantes == 0:
-                        status_dias = "⚠️ *Vence hoje*"
-                    else:
-                        status_dias = f"⏳ *Faltam {dias_restantes} dia(s)*"
-                except Exception:
-                    status_dias = "❓ Data inválida"
-
-                mensagem += f"   └ 📧 `{email_end}`\n      📅 Validade: {data_exp} ({status_dias})\n"
-        mensagem += "\n"
-
-    if len(mensagem) > 4000:
-        for x in range(0, len(mensagem), 4000):
-            await update.message.reply_text(mensagem[x:x+4000], parse_mode="Markdown")
-    else:
-        await update.message.reply_text(mensagem, parse_mode="Markdown")
-
 async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id).strip()
-    texto_recebido = update.message.text.strip()
-    email_original = texto_recebido.lower()
+    email_original = update.message.text.strip().lower()
 
     clientes = carregar_json("clientes.json")
     eh_admin = (user_id == str(ADMIN_ID).strip())
-
     dados_cliente = clientes.get(user_id, {})
-    if not eh_admin and (not dados_cliente or not dados_cliente.get("emails_permitidos")):
-        if user_id not in clientes:
-            clientes[user_id] = {
-                "emails_permitidos": {},
-                "permitir_sensivel": False
-            }
-            salvar_json("clientes.json", clientes)
 
-        await update.message.reply_text(
-            f"🔒 **Acesso Não Liberado!**\n\n"
-            f"Identificamos que você ainda não possui uma assinatura ativa no bot.\n\n"
-            f"👤 **Seu ID de Usuário:** `{user_id}`\n\n"
-            f"👉 Encaminhe o seu ID acima ao **Suporte ADM JR** para realizar o seu cadastro e solicitar a liberação do sistema.",
-            parse_mode="Markdown"
-        )
+    if not eh_admin and (not dados_cliente or not dados_cliente.get("emails_permitidos")):
+        await update.message.reply_text(f"🔒 **Acesso Não Liberado!** Seu ID: `{user_id}`", parse_mode="Markdown")
         return
 
     if not re.match(r"^[\w\.\+-]+@[\w\.-]+\.\w+$", email_original):
-        await update.message.reply_text(
-            "⚠️ Por favor, digite um **endereço de e-mail válido**.",
-            parse_mode="Markdown"
-        )
+        await update.message.reply_text("⚠️ Digite um **e-mail válido**.", parse_mode="Markdown")
         return
 
     pode_acessar_sensivel = eh_admin or dados_cliente.get("permitir_sensivel", False)
 
     if not eh_admin:
         emails_permitidos = dados_cliente.get("emails_permitidos", {})
-        
         email_original_norm = normalizar_email_gmail(email_original)
         chaves_norm = [normalizar_email_gmail(k) for k in emails_permitidos.keys()]
 
-        tem_acesso = "*" in emails_permitidos or email_original in emails_permitidos or email_original_norm in chaves_norm
-
-        if not tem_acesso:
-            await update.message.reply_text(
-                f"❌ Você não tem autorização para acessar os códigos do e-mail `{email_original}`.\n\n"
-                f"Solicite a liberação deste e-mail para o seu ID: `{user_id}` junto ao Suporte.",
-                parse_mode="Markdown"
-            )
-            return
-
-        data_expiracao_str = emails_permitidos.get(email_original) or emails_permitidos.get("*")
-        if not data_expiracao_str:
-            for k, v in emails_permitidos.items():
-                if normalizar_email_gmail(k) == email_original_norm:
-                    data_expiracao_str = v
-                    break
-
-        data_expiracao = datetime.strptime(data_expiracao_str, "%Y-%m-%d").date()
-
-        if datetime.now().date() > data_expiracao:
-            await update.message.reply_text(
-                f"⚠️ **Assinatura Expirada!** Venceu em **{data_expiracao_str}**.\nEntre em contato com o Suporte para renovar.",
-                parse_mode="Markdown"
-            )
+        if "*" not in emails_permitidos and email_original not in emails_permitidos and email_original_norm not in chaves_norm:
+            await update.message.reply_text(f"❌ Você não tem autorização para o e-mail `{email_original}`.", parse_mode="Markdown")
             return
 
     email_base = normalizar_email_gmail(email_original)
@@ -538,54 +340,31 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
             break
 
     if not conta_encontrada:
-        await update.message.reply_text(
-            f"❌ A conta `{email_original}` não possui as credenciais cadastrais no servidor.",
-            parse_mode="Markdown"
-        )
+        await update.message.reply_text(f"❌ Conta `{email_original}` não cadastrada no `contas.json`.", parse_mode="Markdown")
         return
 
-    email_login = conta_encontrada.get("email_login", email_base)
-
-    dados_completos = {
-        **conta_encontrada,
-        "email_usuario": email_login,
-        "email_destinatario": email_original
-    }
-
-    msg_carregando = await update.message.reply_text(
-        f"⏳ *Buscando link/código recente para:* `{email_original}`...\nAguarde alguns segundos.",
-        parse_mode="Markdown"
-    )
+    msg_carregando = await update.message.reply_text(f"⏳ Buscando e-mail recente para `{email_original}`...", parse_mode="Markdown")
 
     loop = asyncio.get_running_loop()
-    try:
-        resultado = await loop.run_in_executor(None, extrair_codigo_imap_wrapper, dados_completos, pode_acessar_sensivel)
-    except Exception as err:
-        logging.error(f"Erro na execução da busca: {err}")
-        resultado = "❌ Ocorreu uma falha temporária ao consultar a caixa de e-mail. Tente novamente em alguns segundos."
+    resultado = await loop.run_in_executor(
+        None, 
+        extrair_codigo_imap_wrapper, 
+        {**conta_encontrada, "email_usuario": conta_encontrada.get("email_login", email_base), "email_destinatario": email_original}, 
+        pode_acessar_sensivel
+    )
 
     try:
         await msg_carregando.edit_text(resultado, parse_mode="Markdown")
-    except Exception as e:
-        logging.error(f"Erro ao editar mensagem no Telegram: {e}")
+    except Exception:
+        pass
 
 def main():
     Thread(target=run_flask, daemon=True).start()
-
-    while True:
-        try:
-            app = ApplicationBuilder().token(TOKEN_TELEGRAM).build()
-
-            app.add_handler(CommandHandler("start", start))
-            app.add_handler(CommandHandler("autorizar", autorizar_cliente))
-            app.add_handler(CommandHandler("listar", listar_clientes))
-            app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receber_mensagem_email))
-
-            print("🤖 Bot iniciado e rodando com alta estabilidade...")
-            app.run_polling(poll_interval=1.0, timeout=20)
-        except Exception as e:
-            logging.error(f"Ocorreu uma queda temporária no Bot: {e}. Reconectando em 5 segundos...")
-            time.sleep(5)
+    app = ApplicationBuilder().token(TOKEN_TELEGRAM).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receber_mensagem_email))
+    print("🤖 Bot Rodando...")
+    app.run_polling(poll_interval=1.0)
 
 if __name__ == "__main__":
     main()
