@@ -53,7 +53,7 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app_flask.run(host='0.0.0.0', port=port)
 
-# --- Gerenciamento JSON com Fusão de Clientes Fixos ---
+# --- Gerenciamento JSON ---
 
 def carregar_json(caminho: str) -> dict:
     dados = {}
@@ -127,7 +127,7 @@ def extrair_url_pura_href(corpo_html: str, termo_busca: str = "http") -> str:
             return link_limpo.strip()
     return ""
 
-# --- Extração IMAP Cronológica ---
+# --- Extração IMAP Direta e Rápida ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -141,7 +141,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
     mail = None
     try:
-        socket.setdefaulttimeout(6)
+        socket.setdefaulttimeout(12)
         mail = imaplib.IMAP4_SSL(host, porta)
         mail.login(email_usuario, senha)
         
@@ -180,7 +180,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             except Exception:
                 diferenca_segundos = 0
 
-            # Tolerância de 15 minutos (com pequena folga para fuso horário de servidores)
+            # Tolerância estrita de 15 minutos
             if diferenca_segundos > 1200 or diferenca_segundos < -300:
                 continue
 
@@ -217,7 +217,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
             minutos = max(1, int(diferenca_segundos // 60)) if diferenca_segundos > 0 else 1
 
-            # 1. SEGURANÇA VIP (TROCA DE SENHA)
+            # 1. VERIFICAÇÃO DE SEGURANÇA VIP (TROCA DE SENHA/DADOS)
             eh_sensivel_vip = (
                 "link para alteração de senha" in assunto or
                 "clique para recuperar sua senha" in assunto or
@@ -253,12 +253,12 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
                     )
 
-            # 2. NETFLIX RESIDÊNCIA E ACESSO TEMPORÁRIO
+            # 2. NETFLIX - RESIDÊNCIA E ACESSO TEMPORÁRIO ("RECEBER CÓDIGO" / "SIM, FUI EU")
             eh_email_residencia = (
-                "como atualizar sua residência" in assunto or
-                "atualizar sua residência" in assunto or
                 "código de acesso temporário" in assunto or
                 "código de acesso temporário" in corpo_texto_puro.lower() or
+                "como atualizar sua residência" in assunto or
+                "atualizar sua residência" in assunto or
                 "atualizar a residência" in corpo_texto_puro.lower() or 
                 "sim, fui eu" in corpo_texto_puro.lower() or
                 "solicitação para atualizar a residência netflix" in corpo_texto_puro.lower() or
@@ -307,7 +307,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
         return "⚠️ Nenhum e-mail recente (últimos 15 minutos) com código ou link válido foi localizado nesta caixa."
 
     except socket.timeout:
-        return "❌ O servidor de e-mail demorou para responder. Tente novamente em alguns segundos."
+        return "❌ O servidor de e-mail demorou para responder. Tente novamente em instantes."
     except Exception as e:
         logging.error(f"Erro IMAP: {e}")
         return "❌ Erro de conexão com a caixa de e-mail. Verifique as credenciais no contas.json."
@@ -534,14 +534,13 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
         parse_mode="Markdown"
     )
 
+    # Execução assíncrona garantida que nunca deixa a mensagem presa em "Buscando..."
     loop = asyncio.get_running_loop()
     try:
-        resultado = await asyncio.wait_for(
-            loop.run_in_executor(None, extrair_codigo_imap_wrapper, dados_completos, pode_acessar_sensivel),
-            timeout=10.0
-        )
-    except asyncio.TimeoutError:
-        resultado = "❌ O servidor de e-mail demorou muito a responder. Tente novamente em instantes."
+        resultado = await loop.run_in_executor(None, extrair_codigo_imap_wrapper, dados_completos, pode_acessar_sensivel)
+    except Exception as err:
+        logging.error(f"Erro na execução da busca: {err}")
+        resultado = "❌ Ocorreu uma falha temporária ao consultar a caixa de e-mail. Tente novamente em alguns segundos."
 
     await msg_carregando.edit_text(resultado, parse_mode="Markdown")
 
