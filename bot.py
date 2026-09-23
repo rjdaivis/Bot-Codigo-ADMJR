@@ -94,7 +94,7 @@ def extrair_url_pura_href(corpo_html: str, termo_busca: str = "http") -> str:
             return link_limpo.strip()
     return ""
 
-# --- Extração IMAP Cronológica Sem Priorização Indevida ---
+# --- Extração IMAP Cronológica ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -185,7 +185,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             minutos = max(1, int(diferenca_segundos // 60)) if diferenca_segundos > 0 else 1
 
             # =========================================================================
-            # E-MAILS DE LISTA NEGRA (EXCLUSIVOS PARA VIP - SENHAS E ALTERAÇÃO DE DADOS)
+            # 1. VERIFICAÇÃO DE SEGURANÇA VIP (TROCA DE SENHAS)
             # =========================================================================
             eh_sensivel_vip = (
                 "link para alteração de senha" in assunto or
@@ -204,7 +204,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     mail.logout()
                     return "🚫 **Solicitação Não Permitida!**\n\nEste e-mail trata de redefinição de senha ou alteração de dados e requer permissão VIP."
 
-                # Se for VIP, extrai e envia o link de redefinição ou código
                 link_vip = extrair_url_pura_href(corpo_html, "http")
                 match_cod_vip = re.search(r'\b(?!(?:19|20)\d{2}\b)\d{4,8}\b', corpo_texto_puro)
                 
@@ -224,10 +223,31 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     )
 
             # =========================================================================
-            # CONTEÚDOS LIBERADOS PARA CLIENTES NORMAIS (SEM LISTA NEGRA)
+            # 2. NETFLIX - RESIDÊNCIA E ACESSO TEMPORÁRIO ("RECEBER CÓDIGO" / "SIM, FUI EU")
             # =========================================================================
+            eh_email_residencia = (
+                "código de acesso temporário" in assunto or
+                "código de acesso temporário" in corpo_texto_puro.lower() or
+                "atualizar a residência" in assunto or 
+                "atualizar a residência" in corpo_texto_puro.lower() or 
+                "sim, fui eu" in corpo_texto_puro.lower() or
+                "solicitação para atualizar a residência netflix" in corpo_texto_puro.lower()
+            )
 
-            # 1. Busca Código Numérico Válido (Evita pegar IDs e datas)
+            if eh_email_residencia:
+                link_netflix = extrair_url_pura_href(corpo_html, "netflix.com")
+                if link_netflix:
+                    mail.close()
+                    mail.logout()
+                    return (
+                        f"✅ **Link de Acesso Temporário / Residência Netflix Encontrado!**\n\n"
+                        f"🔗 Clique no link abaixo para obter o código:\n{link_netflix}\n\n"
+                        f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
+                    )
+
+            # =========================================================================
+            # 3. CÓDIGOS NUMÉRICOS DE ACESSO DIRETO (MYDISNEY, HBO MAX, GLOBO, NETFLIX)
+            # =========================================================================
             match_codigo_contexto = re.search(
                 r'(?:confirme sua identidade com o código|use este código para confirmar|seu código único|seu código de acesso único|informe este código para entrar|informe o código abaixo|informe este código|use esse código de acesso|seu código de acesso|código único|código de verificação|seu código é|código:)[^\d]{1,100}(\d{4,8})\b', 
                 corpo_texto_puro, 
@@ -252,25 +272,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     f"🔑 Seu código é: `{codigo_encontrado}`\n\n"
                     f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
                 )
-
-            # 2. Busca Link de Residência Netflix ("Sim, fui eu" / "Receber código")
-            eh_email_residencia = (
-                "atualizar a residência" in assunto or 
-                "atualizar a residência" in corpo_texto_puro.lower() or 
-                "sim, fui eu" in corpo_texto_puro.lower() or
-                "solicitação para atualizar a residência netflix" in corpo_texto_puro.lower()
-            )
-
-            if eh_email_residencia:
-                link_netflix = extrair_url_pura_href(corpo_html, "netflix.com")
-                if link_netflix:
-                    mail.close()
-                    mail.logout()
-                    return (
-                        f"✅ **Link de Atualização de Residência Netflix Encontrado!**\n\n"
-                        f"🔗 Clique no link abaixo para confirmar:\n{link_netflix}\n\n"
-                        f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
-                    )
 
         mail.close()
         mail.logout()
