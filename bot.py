@@ -45,7 +45,6 @@ CLIENTES_FIXOS_PADRAO = {
         },
         "permitir_sensivel": False
     },
-    # Adicionado o cliente do Print 2 para persistência permanente
     "5804754899": {
         "emails_permitidos": {
             "ale62828adm.jr7maltes@gmail.com": "2026-12-31",
@@ -66,7 +65,7 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app_flask.run(host='0.0.0.0', port=port)
 
-# --- Gerenciamento JSON com Mesclagem de Clientes Fixos ---
+# --- Gerenciamento JSON ---
 
 def carregar_json(caminho: str) -> dict:
     dados = {}
@@ -219,10 +218,11 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             corpo_texto_puro = extrair_apenas_texto_visivel(corpo_html)
             
             texto_completo = (assunto + " " + remetente + " " + corpo_texto_puro).lower()
-            destinatario_to = normalizar_email_gmail(str(msg.get("To", "")))
+            destinatario_to_norm = normalizar_email_gmail(str(msg.get("To", "")))
 
+            # Comparação flexível e normalizada de e-mails para ignorar variação de pontos do Gmail
             if email_solicitado_norm and email_solicitado_norm != email_usuario_norm:
-                if email_solicitado_norm not in normalizar_email_gmail(texto_completo) and email_solicitado_norm not in destinatario_to:
+                if email_solicitado_norm not in normalizar_email_gmail(texto_completo) and email_solicitado_norm not in destinatario_to_norm:
                     continue
 
             if any(termo in assunto for termo in ["novo login", "alerta de segurança", "dispositivo conectado", "new login"]):
@@ -266,7 +266,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
                     )
 
-            # 2. NETFLIX - RESIDÊNCIA E ACESSO TEMPORÁRIO
+            # 2. NETFLIX RESIDÊNCIA E ACESSO TEMPORÁRIO
             eh_email_residencia = (
                 "você pediu para atualizar sua residência" in assunto or
                 "você pediu para atualizar sua residência" in corpo_texto_puro.lower() or
@@ -290,7 +290,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
                     )
 
-            # 3. CÓDIGOS NUMÉRICOS DE ACESSO
+            # 3. CÓDIGOS NUMÉRICOS DE ACESSO (HBO MAX, DISNEY, NETFLIX, GLOBO)
             match_codigo_contexto = re.search(
                 r'(?:confirme sua identidade com o código|use este código para confirmar|seu código único|seu código de acesso único|informe este código para entrar|informe o código abaixo|informe este código|use esse código de acesso|seu código de acesso|código único|código de verificação|seu código é|código:)[^\d]{1,100}(\d{4,8})\b', 
                 corpo_texto_puro, 
