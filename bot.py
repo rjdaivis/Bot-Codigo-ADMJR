@@ -55,6 +55,7 @@ CLIENTES_FIXOS_PADRAO = {
     "7219528497": {
         "emails_permitidos": {
             "costalinhare.s325@gmail.com": "2026-12-31",
+            "costalinhares325@gmail.com": "2026-12-31",
             "elimira.n.dael.lo@gmail.com": "2026-12-31"
         },
         "permitir_sensivel": False
@@ -65,7 +66,7 @@ app_flask = Flask('')
 
 @app_flask.route('/')
 def home():
-    return "Bot Online e Estável"
+    return "Bot de Códigos Online"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
@@ -155,10 +156,10 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
     mail = None
     try:
-        socket.setdefaulttimeout(10)
+        socket.setdefaulttimeout(6)
         mail = imaplib.IMAP4_SSL(host, porta)
         mail.login(email_usuario, senha)
-        mail.select("INBOX")
+        mail.select("INBOX", readonly=True)
 
         status, messages = mail.search(None, "ALL")
         if status != "OK" or not messages[0]:
@@ -167,7 +168,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             return "⚠️ Nenhum e-mail encontrado na caixa de entrada."
 
         id_list = messages[0].split()
-        ultimos_ids = id_list[-15:]
+        ultimos_ids = id_list[-5:]
         ultimos_ids.reverse()
 
         agora = datetime.now(timezone.utc)
@@ -190,7 +191,8 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             except Exception:
                 diferenca_segundos = 0
 
-            if diferenca_segundos > 1800 or diferenca_segundos < -300:
+            # LIMITE DE TEMPO: REGRA DOS 15 MINUTOS (900 SEGUNDOS)
+            if diferenca_segundos > 900 or diferenca_segundos < -300:
                 continue
 
             assunto = str(msg.get("Subject", "")).lower()
@@ -223,7 +225,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
             minutos = max(1, int(diferenca_segundos // 60)) if diferenca_segundos > 0 else 1
 
-            # REDEFINIÇÃO DE SENHA
+            # 1. REDEFINIÇÃO DE SENHA VIP
             eh_sensivel_vip = (
                 "redefinir senha" in assunto or "redefinir senha" in corpo_texto_puro.lower() or
                 "recuperar senha" in corpo_texto_puro.lower() or "reset-password" in corpo_html.lower()
@@ -245,8 +247,9 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 elif match_cod_vip:
                     return f"✅ **Código de Redefinição Encontrado!**\n\n🔑 Código: `{match_cod_vip.group(0)}`\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
 
-            # NETFLIX RESIDÊNCIA E CÓDIGOS TEMPORÁRIOS
+            # 2. NETFLIX RESIDÊNCIA E CÓDIGOS TEMPORÁRIOS
             eh_email_residencia = (
+                "código de acesso temporário" in assunto or "código de acesso temporário" in corpo_texto_puro.lower() or
                 "acesso temporário" in assunto or "acesso temporário" in corpo_texto_puro.lower() or
                 "atualizar sua residência" in assunto or "atualizar a residência" in corpo_texto_puro.lower() or 
                 "sim, fui eu" in corpo_texto_puro.lower() or "receber código" in corpo_texto_puro.lower()
@@ -259,7 +262,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     mail.logout()
                     return f"✅ **Link Netflix Encontrado!**\n\n🔗 Clique abaixo para liberar:\n{link_netflix}\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
 
-            # CÓDIGOS NUMÉRICO GERAIS (HBO MAX, DISNEY, GLOBO, ETC)
+            # 3. CÓDIGOS NUMÉRICOS
             match_codigo_solto = re.search(r'\b(?!(?:19|20)\d{2}\b)\d{4,6}\b', corpo_texto_puro)
             if match_codigo_solto:
                 codigo_encontrado = match_codigo_solto.group(0)
@@ -269,11 +272,11 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
         mail.close()
         mail.logout()
-        return "⚠️ Nenhum e-mail recente (últimos 30 minutos) com código ou link válido foi localizado."
+        return "⚠️ Nenhum e-mail recente (últimos 15 minutos) com código ou link válido foi localizado nesta caixa."
 
     except Exception as e:
         logging.error(f"Erro IMAP: {e}")
-        return "❌ O servidor de e-mail demorou para responder ou recusou a conexão. Tente novamente em instantes."
+        return "❌ O servidor de e-mail demorou para responder. Tente novamente em alguns segundos."
     finally:
         try:
             if mail:
@@ -299,7 +302,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         salvar_json("clientes.json", clientes)
 
     await update.message.reply_text(
-        f"👋 **Central de Liberação de Códigos**\n\n🆔 **Seu ID:** `{user_id}`\n\nEnvie o e-mail cadastrado para buscar códigos recentes.",
+        f"👋 **Central de Liberação de Códigos**\n\n🆔 **Seu ID:** `{user_id}`\n\nEnvie o e-mail cadastrado para buscar códigos recentes (últimos 15 min).",
         parse_mode="Markdown"
     )
 
