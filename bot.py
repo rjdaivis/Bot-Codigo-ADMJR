@@ -20,9 +20,9 @@ logging.basicConfig(
 )
 
 TOKEN_TELEGRAM = os.environ.get("TOKEN_TELEGRAM", "SEU_TOKEN_AQUI")
-ADMIN_ID = 7496198484  # ID do Dono / Administrador
+ADMIN_ID = 7496198484  # ID do Administrador
 
-# --- BASE FIXA DE CLIENTES QUE NUNCA SERÃO APAGADOS EM UPDATE OU REINÍCIO ---
+# --- BASE FIXA DE CLIENTES QUE NUNCA SERÃO APAGADOS EM REINÍCIOS OU DEPLOYS ---
 CLIENTES_FIXOS_PADRAO = {
     "7496198484": {
         "emails_permitidos": {"*": "2030-12-31"},
@@ -44,6 +44,15 @@ CLIENTES_FIXOS_PADRAO = {
             "mau.a.dan.ie.l.a@gmail.com": "2026-10-21"
         },
         "permitir_sensivel": False
+    },
+    # Adicionado o cliente do Print 2 para persistência permanente
+    "5804754899": {
+        "emails_permitidos": {
+            "ale62828adm.jr7maltes@gmail.com": "2026-12-31",
+            "marianal.as.tos8.1@gmail.com": "2026-12-31",
+            "marianna.admjr@outlook.com": "2026-12-31"
+        },
+        "permitir_sensivel": False
     }
 }
 
@@ -57,7 +66,7 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app_flask.run(host='0.0.0.0', port=port)
 
-# --- Gerenciamento JSON ---
+# --- Gerenciamento JSON com Mesclagem de Clientes Fixos ---
 
 def carregar_json(caminho: str) -> dict:
     dados = {}
@@ -145,7 +154,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
     mail = None
     try:
-        socket.setdefaulttimeout(12)
+        socket.setdefaulttimeout(8)
         mail = imaplib.IMAP4_SSL(host, porta)
         mail.login(email_usuario, senha)
         
@@ -184,7 +193,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             except Exception:
                 diferenca_segundos = 0
 
-            # Tolerância de 15 minutos
+            # Tolerância estrita de 15 minutos
             if diferenca_segundos > 1200 or diferenca_segundos < -300:
                 continue
 
@@ -221,7 +230,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
             minutos = max(1, int(diferenca_segundos // 60)) if diferenca_segundos > 0 else 1
 
-            # 1. VERIFICAÇÃO DE SEGURANÇA VIP (TROCA DE SENHA)
+            # 1. SEGURANÇA VIP (TROCA DE SENHA)
             eh_sensivel_vip = (
                 "link para alteração de senha" in assunto or
                 "clique para recuperar sua senha" in assunto or
@@ -257,16 +266,17 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
                     )
 
-            # 2. NETFLIX RESIDÊNCIA E ACESSO TEMPORÁRIO
+            # 2. NETFLIX - RESIDÊNCIA E ACESSO TEMPORÁRIO
             eh_email_residencia = (
+                "você pediu para atualizar sua residência" in assunto or
+                "você pediu para atualizar sua residência" in corpo_texto_puro.lower() or
                 "código de acesso temporário" in assunto or
                 "código de acesso temporário" in corpo_texto_puro.lower() or
                 "como atualizar sua residência" in assunto or
                 "atualizar sua residência" in assunto or
                 "atualizar a residência" in corpo_texto_puro.lower() or 
                 "sim, fui eu" in corpo_texto_puro.lower() or
-                "solicitação para atualizar a residência netflix" in corpo_texto_puro.lower() or
-                "você pediu para atualizar sua residência" in corpo_texto_puro.lower()
+                "solicitação para atualizar a residência netflix" in corpo_texto_puro.lower()
             )
 
             if eh_email_residencia:
