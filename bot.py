@@ -20,10 +20,14 @@ logging.basicConfig(
 )
 
 TOKEN_TELEGRAM = os.environ.get("TOKEN_TELEGRAM", "SEU_TOKEN_AQUI")
-ADMIN_ID = 7496198484  # Substitua pelo seu ID numérico do Telegram
+ADMIN_ID = 7496198484  # ID do Dono / Administrador
 
-# --- CLIENTES FIXOS QUE NUNCA SERÃO APAGADOS EM REINÍCIOS/UPDATES ---
+# --- BASE FIXA DE CLIENTES QUE NUNCA SERÃO APAGADOS EM UPDATE OU REINÍCIO ---
 CLIENTES_FIXOS_PADRAO = {
+    "7496198484": {
+        "emails_permitidos": {"*": "2030-12-31"},
+        "permitir_sensivel": True
+    },
     "6035184245": {
         "emails_permitidos": {"*": "2027-01-16"},
         "permitir_sensivel": True
@@ -69,9 +73,9 @@ def carregar_json(caminho: str) -> dict:
             if id_fixo not in dados:
                 dados[id_fixo] = info_fixa
             else:
+                if "emails_permitidos" not in dados[id_fixo]:
+                    dados[id_fixo]["emails_permitidos"] = {}
                 for em, val in info_fixa.get("emails_permitidos", {}).items():
-                    if "emails_permitidos" not in dados[id_fixo]:
-                        dados[id_fixo]["emails_permitidos"] = {}
                     dados[id_fixo]["emails_permitidos"][em] = val
                 if info_fixa.get("permitir_sensivel"):
                     dados[id_fixo]["permitir_sensivel"] = True
@@ -127,7 +131,7 @@ def extrair_url_pura_href(corpo_html: str, termo_busca: str = "http") -> str:
             return link_limpo.strip()
     return ""
 
-# --- Extração IMAP Direta e Rápida ---
+# --- Extração IMAP Direta ---
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
@@ -180,7 +184,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             except Exception:
                 diferenca_segundos = 0
 
-            # Tolerância estrita de 15 minutos
+            # Tolerância de 15 minutos
             if diferenca_segundos > 1200 or diferenca_segundos < -300:
                 continue
 
@@ -217,7 +221,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
             minutos = max(1, int(diferenca_segundos // 60)) if diferenca_segundos > 0 else 1
 
-            # 1. VERIFICAÇÃO DE SEGURANÇA VIP (TROCA DE SENHA/DADOS)
+            # 1. VERIFICAÇÃO DE SEGURANÇA VIP (TROCA DE SENHA)
             eh_sensivel_vip = (
                 "link para alteração de senha" in assunto or
                 "clique para recuperar sua senha" in assunto or
@@ -253,7 +257,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
                     )
 
-            # 2. NETFLIX - RESIDÊNCIA E ACESSO TEMPORÁRIO ("RECEBER CÓDIGO" / "SIM, FUI EU")
+            # 2. NETFLIX RESIDÊNCIA E ACESSO TEMPORÁRIO
             eh_email_residencia = (
                 "código de acesso temporário" in assunto or
                 "código de acesso temporário" in corpo_texto_puro.lower() or
@@ -534,7 +538,6 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
         parse_mode="Markdown"
     )
 
-    # Execução assíncrona garantida que nunca deixa a mensagem presa em "Buscando..."
     loop = asyncio.get_running_loop()
     try:
         resultado = await loop.run_in_executor(None, extrair_codigo_imap_wrapper, dados_completos, pode_acessar_sensivel)
