@@ -22,6 +22,7 @@ logging.basicConfig(
 TOKEN_TELEGRAM = os.environ.get("TOKEN_TELEGRAM", "SEU_TOKEN_AQUI")
 ADMIN_ID = 7496198484
 
+# --- BASE FIXA DE CLIENTES PERMANENTES ---
 CLIENTES_FIXOS_PADRAO = {
     "7496198484": {
         "emails_permitidos": {"*": "2030-12-31"},
@@ -71,6 +72,8 @@ def home():
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app_flask.run(host='0.0.0.0', port=port)
+
+# --- Gerenciamento JSON ---
 
 def carregar_json(caminho: str) -> dict:
     dados = {}
@@ -156,7 +159,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
     mail = None
     try:
-        socket.setdefaulttimeout(6)
+        socket.setdefaulttimeout(8)
         mail = imaplib.IMAP4_SSL(host, porta)
         mail.login(email_usuario, senha)
         mail.select("INBOX", readonly=True)
@@ -168,7 +171,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             return "⚠️ Nenhum e-mail encontrado na caixa de entrada."
 
         id_list = messages[0].split()
-        ultimos_ids = id_list[-5:]
+        ultimos_ids = id_list[-8:]
         ultimos_ids.reverse()
 
         agora = datetime.now(timezone.utc)
@@ -191,7 +194,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             except Exception:
                 diferenca_segundos = 0
 
-            # LIMITE DE TEMPO: REGRA DOS 15 MINUTOS (900 SEGUNDOS)
+            # LIMITE DE TEMPO: EXACTAMENTE 15 MINUTOS (900 SEGUNDOS)
             if diferenca_segundos > 900 or diferenca_segundos < -300:
                 continue
 
@@ -262,7 +265,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     mail.logout()
                     return f"✅ **Link Netflix Encontrado!**\n\n🔗 Clique abaixo para liberar:\n{link_netflix}\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
 
-            # 3. CÓDIGOS NUMÉRICOS
+            # 3. CÓDIGOS NUMÉRICOS DE ACESSO
             match_codigo_solto = re.search(r'\b(?!(?:19|20)\d{2}\b)\d{4,6}\b', corpo_texto_puro)
             if match_codigo_solto:
                 codigo_encontrado = match_codigo_solto.group(0)
@@ -284,6 +287,8 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
         except Exception:
             pass
 
+# --- Handlers Telegram ---
+
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -302,9 +307,94 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         salvar_json("clientes.json", clientes)
 
     await update.message.reply_text(
-        f"👋 **Central de Liberação de Códigos**\n\n🆔 **Seu ID:** `{user_id}`\n\nEnvie o e-mail cadastrado para buscar códigos recentes (últimos 15 min).",
+        f"👋 **Central de Liberação de Códigos**\n\n"
+        f"🆔 **Seu ID do Telegram:** `{user_id}`\n\n"
+        f"Envie o e-mail cadastrado abaixo para buscar códigos/links recentes (últimos 15 min).",
         parse_mode="Markdown"
     )
+
+async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if str(update.effective_user.id).strip() != str(ADMIN_ID).strip():
+        return
+
+    try:
+        user_id_cliente = str(context.args[0]).strip()
+        email_cliente = context.args[1].strip().lower()
+        dias = int(context.args[2])
+        
+        liberar_sensivel = False
+        if len(context.args) > 3 and context.args[3].lower() in ["vip", "sensivel", "true", "todos", "sim"]:
+            liberar_sensivel = True
+
+        clientes = carregar_json("clientes.json")
+        data_validade = (datetime.now() + timedelta(days=dias)).strftime("%Y-%m-%d")
+
+        if user_id_cliente not in clientes:
+            clientes[user_id_cliente] = {
+                "emails_permitidos": {},
+                "permitir_sensivel": liberar_sensivel
+            }
+        else:
+            if liberar_sensivel:
+                clientes[user_id_cliente]["permitir_sensivel"] = True
+
+        if "emails_permitidos" not in clientes[user_id_cliente]:
+            clientes[user_id_cliente]["emails_permitidos"] = {}
+
+        clientes[user_id_cliente]["emails_permitidos"][email_cliente] = data_validade
+        salvar_json("clientes.json", clientes)
+
+        msg_vip = " (Acesso Total + VIP)" if clientes[user_id_cliente].get("permitir_sensivel") else ""
+        await update.message.reply_text(
+            f"✅ **Acesso Concedido!**\n\n"
+            f"👤 **ID Cliente:** `{user_id_cliente}`\n"
+            f"📧 **E-mail Liberado:** `{email_cliente}`\n"
+            f"📅 **Válido até:** {data_validade} ({dias} dias){msg_vip}",
+            parse_mode="Markdown"
+        )
+    except Exception:
+        await update.message.reply_text(
+            "⚠️ **Uso correto:** `/autorizar ID_CLIENTE EMAIL DIAS [vip]`",
+            parse_mode="Markdown"
+        )
+
+async def listar_clientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if str(update.effective_user.id).strip() != str(ADMIN_ID).strip():
+        return
+
+    clientes = carregar_json("clientes.json")
+    if not clientes:
+        await update.message.reply_text("📋 **Nenhum cliente cadastrado no momento.**", parse_mode="Markdown")
+        return
+
+    hoje = datetime.now().date()
+    mensagem = "📋 **Lista de Clientes Liberados:**\n\n"
+
+    for id_cliente, dados in clientes.items():
+        emails = dados.get("emails_permitidos", {})
+        vip = "Sim" if dados.get("permitir_sensivel") else "Não"
+        
+        mensagem += f"👤 **ID:** `{id_cliente}` | **VIP:** {vip}\n"
+        
+        if not emails:
+            mensagem += "   └ ⚠️ Nenhum e-mail liberado.\n"
+        else:
+            for email_end, data_exp in emails.items():
+                try:
+                    exp_date = datetime.strptime(data_exp, "%Y-%m-%d").date()
+                    dias_restantes = (exp_date - hoje).days
+                    status_dias = "🛑 *Expirado*" if dias_restantes < 0 else f"⏳ *Faltam {dias_restantes} dia(s)*"
+                except Exception:
+                    status_dias = "❓ Data inválida"
+
+                mensagem += f"   └ 📧 `{email_end}`\n      📅 Validade: {data_exp} ({status_dias})\n"
+        mensagem += "\n"
+
+    if len(mensagem) > 4000:
+        for x in range(0, len(mensagem), 4000):
+            await update.message.reply_text(mensagem[x:x+4000], parse_mode="Markdown")
+    else:
+        await update.message.reply_text(mensagem, parse_mode="Markdown")
 
 async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id).strip()
@@ -315,11 +405,14 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
     dados_cliente = clientes.get(user_id, {})
 
     if not eh_admin and (not dados_cliente or not dados_cliente.get("emails_permitidos")):
-        await update.message.reply_text(f"🔒 **Acesso Não Liberado!** Seu ID: `{user_id}`", parse_mode="Markdown")
+        await update.message.reply_text(
+            f"🔒 **Acesso Não Liberado!**\n\nSeu ID de Usuário: `{user_id}`\n\nEncaminhe ao Suporte para liberação.",
+            parse_mode="Markdown"
+        )
         return
 
     if not re.match(r"^[\w\.\+-]+@[\w\.-]+\.\w+$", email_original):
-        await update.message.reply_text("⚠️ Digite um **e-mail válido**.", parse_mode="Markdown")
+        await update.message.reply_text("⚠️ Por favor, digite um **endereço de e-mail válido**.", parse_mode="Markdown")
         return
 
     pode_acessar_sensivel = eh_admin or dados_cliente.get("permitir_sensivel", False)
@@ -329,8 +422,10 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
         email_original_norm = normalizar_email_gmail(email_original)
         chaves_norm = [normalizar_email_gmail(k) for k in emails_permitidos.keys()]
 
-        if "*" not in emails_permitidos and email_original not in emails_permitidos and email_original_norm not in chaves_norm:
-            await update.message.reply_text(f"❌ Você não tem autorização para o e-mail `{email_original}`.", parse_mode="Markdown")
+        tem_acesso = "*" in emails_permitidos or email_original in emails_permitidos or email_original_norm in chaves_norm
+
+        if not tem_acesso:
+            await update.message.reply_text(f"❌ Você não tem autorização para acessar o e-mail `{email_original}`.", parse_mode="Markdown")
             return
 
     email_base = normalizar_email_gmail(email_original)
@@ -343,31 +438,47 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
             break
 
     if not conta_encontrada:
-        await update.message.reply_text(f"❌ Conta `{email_original}` não cadastrada no `contas.json`.", parse_mode="Markdown")
+        await update.message.reply_text(f"❌ A conta `{email_original}` não possui as credenciais no `contas.json`.", parse_mode="Markdown")
         return
+
+    email_login = conta_encontrada.get("email_login", email_base)
 
     msg_carregando = await update.message.reply_text(f"⏳ Buscando e-mail recente para `{email_original}`...", parse_mode="Markdown")
 
     loop = asyncio.get_running_loop()
-    resultado = await loop.run_in_executor(
-        None, 
-        extrair_codigo_imap_wrapper, 
-        {**conta_encontrada, "email_usuario": conta_encontrada.get("email_login", email_base), "email_destinatario": email_original}, 
-        pode_acessar_sensivel
-    )
+    try:
+        resultado = await loop.run_in_executor(
+            None, 
+            extrair_codigo_imap_wrapper, 
+            {**conta_encontrada, "email_usuario": email_login, "email_destinatario": email_original}, 
+            pode_acessar_sensivel
+        )
+    except Exception as err:
+        logging.error(f"Erro na execução da busca: {err}")
+        resultado = "❌ Ocorreu uma falha temporária ao consultar a caixa de e-mail."
 
     try:
         await msg_carregando.edit_text(resultado, parse_mode="Markdown")
-    except Exception:
-        pass
+    except Exception as e:
+        logging.error(f"Erro ao editar mensagem: {e}")
 
 def main():
     Thread(target=run_flask, daemon=True).start()
-    app = ApplicationBuilder().token(TOKEN_TELEGRAM).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receber_mensagem_email))
-    print("🤖 Bot Rodando...")
-    app.run_polling(poll_interval=1.0)
+
+    while True:
+        try:
+            app = ApplicationBuilder().token(TOKEN_TELEGRAM).build()
+
+            app.add_handler(CommandHandler("start", start))
+            app.add_handler(CommandHandler("autorizar", autorizar_cliente))
+            app.add_handler(CommandHandler("listar", listar_clientes))
+            app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receber_mensagem_email))
+
+            print("🤖 Bot iniciado e rodando com alta estabilidade...")
+            app.run_polling(poll_interval=1.0, timeout=20)
+        except Exception as e:
+            logging.error(f"Ocorreu uma queda temporária no Bot: {e}. Reconectando em 5 segundos...")
+            time.sleep(5)
 
 if __name__ == "__main__":
     main()
