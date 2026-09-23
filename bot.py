@@ -22,6 +22,27 @@ logging.basicConfig(
 TOKEN_TELEGRAM = os.environ.get("TOKEN_TELEGRAM", "SEU_TOKEN_AQUI")
 ADMIN_ID = 7496198484  # Substitua pelo seu ID numérico do Telegram
 
+# --- CLIENTES FIXOS QUE NUNCA SERÃO APAGADOS EM REINÍCIOS/UPDATES ---
+CLIENTES_FIXOS_PADRAO = {
+    "6035184245": {
+        "emails_permitidos": {"*": "2027-01-16"},
+        "permitir_sensivel": True
+    },
+    "7955838907": {
+        "emails_permitidos": {
+            "pastos.gl.au.b.er@gmail.com": "2026-10-04",
+            "mariana.l.a.s.t.os8.1@gmail.com": "2026-10-21"
+        },
+        "permitir_sensivel": False
+    },
+    "1399615731": {
+        "emails_permitidos": {
+            "mau.a.dan.ie.l.a@gmail.com": "2026-10-21"
+        },
+        "permitir_sensivel": False
+    }
+}
+
 app_flask = Flask('')
 
 @app_flask.route('/')
@@ -32,17 +53,31 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app_flask.run(host='0.0.0.0', port=port)
 
-# --- Gerenciamento JSON ---
+# --- Gerenciamento JSON com Fusão de Clientes Fixos ---
 
 def carregar_json(caminho: str) -> dict:
+    dados = {}
     try:
         if os.path.exists(caminho):
             with open(caminho, "r", encoding="utf-8") as f:
-                return json.load(f)
-        return {}
+                dados = json.load(f)
     except Exception as e:
         logging.error(f"Erro ao carregar {caminho}: {e}")
-        return {}
+
+    # Mescla clientes fixos do código para garantir que NUNCA sejam perdidos
+    if caminho == "clientes.json":
+        for id_fixo, info_fixa in CLIENTES_FIXOS_PADRAO.items():
+            if id_fixo not in dados:
+                dados[id_fixo] = info_fixa
+            else:
+                # Mantém emails permitidos adicionados sem sobrescrever
+                for em, val in info_fixa.get("emails_permitidos", {}).items():
+                    if "emails_permitidos" not in dados[id_fixo]:
+                        dados[id_fixo]["emails_permitidos"] = {}
+                    dados[id_fixo]["emails_permitidos"][em] = val
+                if info_fixa.get("permitir_sensivel"):
+                    dados[id_fixo]["permitir_sensivel"] = True
+    return dados
 
 def salvar_json(caminho: str, dados: dict):
     try:
@@ -147,7 +182,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             except Exception:
                 diferenca_segundos = 0
 
-            # Tolerância estrita de 15 minutos
             if diferenca_segundos > 1200 or diferenca_segundos < -300:
                 continue
 
@@ -184,9 +218,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
             minutos = max(1, int(diferenca_segundos // 60)) if diferenca_segundos > 0 else 1
 
-            # =========================================================================
-            # 1. VERIFICAÇÃO DE SEGURANÇA VIP (TROCA DE SENHAS)
-            # =========================================================================
+            # 1. SEGURANÇA VIP (TROCA DE SENHA/DADOS)
             eh_sensivel_vip = (
                 "link para alteração de senha" in assunto or
                 "clique para recuperar sua senha" in assunto or
@@ -222,9 +254,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
                     )
 
-            # =========================================================================
-            # 2. NETFLIX - RESIDÊNCIA E ACESSO TEMPORÁRIO ("RECEBER CÓDIGO" / "SIM, FUI EU")
-            # =========================================================================
+            # 2. NETFLIX - RESIDÊNCIA E ACESSO TEMPORÁRIO
             eh_email_residencia = (
                 "código de acesso temporário" in assunto or
                 "código de acesso temporário" in corpo_texto_puro.lower() or
@@ -245,9 +275,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
                     )
 
-            # =========================================================================
-            # 3. CÓDIGOS NUMÉRICOS DE ACESSO DIRETO (MYDISNEY, HBO MAX, GLOBO, NETFLIX)
-            # =========================================================================
+            # 3. CÓDIGOS NUMÉRICOS DE ACESSO DIRETO
             match_codigo_contexto = re.search(
                 r'(?:confirme sua identidade com o código|use este código para confirmar|seu código único|seu código de acesso único|informe este código para entrar|informe o código abaixo|informe este código|use esse código de acesso|seu código de acesso|código único|código de verificação|seu código é|código:)[^\d]{1,100}(\d{4,8})\b', 
                 corpo_texto_puro, 
