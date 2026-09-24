@@ -22,7 +22,6 @@ logging.basicConfig(
 TOKEN_TELEGRAM = os.environ.get("TOKEN_TELEGRAM", "SEU_TOKEN_AQUI")
 ADMIN_ID = 7496198484
 
-# --- BASE FIXA DE CLIENTES PERMANENTES ---
 CLIENTES_FIXOS_PADRAO = {
     "7496198484": {
         "emails_permitidos": {"*": "2030-12-31"},
@@ -72,8 +71,6 @@ def home():
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app_flask.run(host='0.0.0.0', port=port)
-
-# --- Gerenciamento JSON ---
 
 def carregar_json(caminho: str) -> dict:
     dados = {}
@@ -137,6 +134,27 @@ def extrair_apenas_texto_visivel(html_str: str) -> str:
     texto = re.sub(r'\s+', ' ', texto)
     return texto.strip()
 
+# --- EXTRATOR DE LINKS NETFLIX APERFEIÇOADO ---
+def extrair_link_netflix_html(corpo_html: str) -> str:
+    if not corpo_html:
+        return ""
+    
+    # Busca links direcionados do botão "Receber Código" ou "Atualizar Residência"
+    matches = re.findall(r'href=["\'](https?://[^"\']+)["\']', corpo_html, re.IGNORECASE)
+    for link in matches:
+        link_lower = link.lower()
+        if "netflix.com" in link_lower:
+            if any(p in link_lower for p in ["accountaccess", "update-primary-location", "verify", "household", "nftoken"]):
+                link_limpo = link.replace("&#x3D;", "=").replace("&amp;", "&")
+                return link_limpo.strip()
+                
+    # Fallback para qualquer link da Netflix que não seja termos/cancelamento
+    for link in matches:
+        if "netflix.com" in link.lower() and not any(x in link.lower() for x in ["unsubscribe", "help", "privacy", "terms"]):
+            link_limpo = link.replace("&#x3D;", "=").replace("&amp;", "&")
+            return link_limpo.strip()
+    return ""
+
 def extrair_url_pura_href(corpo_html: str, termo_busca: str = "http") -> str:
     if not corpo_html:
         return ""
@@ -194,7 +212,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             except Exception:
                 diferenca_segundos = 0
 
-            # LIMITE DE TEMPO: EXACTAMENTE 15 MINUTOS (900 SEGUNDOS)
+            # LIMITE DE TEMPO: REGRA DE 15 MINUTOS (900 SEGUNDOS)
             if diferenca_segundos > 900 or diferenca_segundos < -300:
                 continue
 
@@ -250,20 +268,25 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 elif match_cod_vip:
                     return f"✅ **Código de Redefinição Encontrado!**\n\n🔑 Código: `{match_cod_vip.group(0)}`\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
 
-            # 2. NETFLIX RESIDÊNCIA E CÓDIGOS TEMPORÁRIOS
+            # 2. NETFLIX RESIDÊNCIA E CÓDIGOS TEMPORÁRIOS ("RECEBER CÓDIGO" / "SIM, FUI EU")
             eh_email_residencia = (
                 "código de acesso temporário" in assunto or "código de acesso temporário" in corpo_texto_puro.lower() or
                 "acesso temporário" in assunto or "acesso temporário" in corpo_texto_puro.lower() or
                 "atualizar sua residência" in assunto or "atualizar a residência" in corpo_texto_puro.lower() or 
-                "sim, fui eu" in corpo_texto_puro.lower() or "receber código" in corpo_texto_puro.lower()
+                "sim, fui eu" in corpo_texto_puro.lower() or "receber código" in corpo_texto_puro.lower() or
+                "solicitação de código de acesso temporário" in corpo_texto_puro.lower()
             )
 
-            if eh_email_residencia:
-                link_netflix = extrair_url_pura_href(corpo_html, "netflix.com")
+            if eh_email_residencia or "netflix" in remetente:
+                link_netflix = extrair_link_netflix_html(corpo_html)
                 if link_netflix:
                     mail.close()
                     mail.logout()
-                    return f"✅ **Link Netflix Encontrado!**\n\n🔗 Clique abaixo para liberar:\n{link_netflix}\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
+                    return (
+                        f"✅ **Link de Acesso Temporário / Residência Netflix Encontrado!**\n\n"
+                        f"🔗 Clique no link abaixo para obter o código:\n{link_netflix}\n\n"
+                        f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
+                    )
 
             # 3. CÓDIGOS NUMÉRICOS DE ACESSO
             match_codigo_solto = re.search(r'\b(?!(?:19|20)\d{2}\b)\d{4,6}\b', corpo_texto_puro)
