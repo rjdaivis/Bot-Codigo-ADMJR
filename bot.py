@@ -134,25 +134,34 @@ def extrair_apenas_texto_visivel(html_str: str) -> str:
     texto = re.sub(r'\s+', ' ', texto)
     return texto.strip()
 
-# --- EXTRATOR DE LINKS NETFLIX APERFEIÇOADO ---
+# --- EXTRATOR DE LINK EXATO DO BOTÃO NETFLIX ---
 def extrair_link_netflix_html(corpo_html: str) -> str:
     if not corpo_html:
         return ""
     
-    # Busca links direcionados do botão "Receber Código" ou "Atualizar Residência"
     matches = re.findall(r'href=["\'](https?://[^"\']+)["\']', corpo_html, re.IGNORECASE)
+    
+    # 1. Prioridade absoluta: Link exato do botão "Receber código" / "Atualizar Residência"
     for link in matches:
         link_lower = link.lower()
-        if "netflix.com" in link_lower:
-            if any(p in link_lower for p in ["accountaccess", "update-primary-location", "verify", "household", "nftoken"]):
+        if "netflix.com" in link_lower and any(p in link_lower for p in ["accountaccess", "update-primary-location", "nftoken"]):
+            if "travel" not in link_lower and "help" not in link_lower:
                 link_limpo = link.replace("&#x3D;", "=").replace("&amp;", "&")
                 return link_limpo.strip()
-                
-    # Fallback para qualquer link da Netflix que não seja termos/cancelamento
+
+    # 2. Segunda prioridade: qualquer link de verificação válido da Netflix
     for link in matches:
-        if "netflix.com" in link.lower() and not any(x in link.lower() for x in ["unsubscribe", "help", "privacy", "terms"]):
+        link_lower = link.lower()
+        if "netflix.com" in link_lower and "nftoken" in link_lower:
             link_limpo = link.replace("&#x3D;", "=").replace("&amp;", "&")
             return link_limpo.strip()
+
+    # 3. Fallback para links válidos
+    for link in matches:
+        if "netflix.com" in link.lower() and not any(x in link.lower() for x in ["unsubscribe", "help", "privacy", "terms", "twitter", "facebook"]):
+            link_limpo = link.replace("&#x3D;", "=").replace("&amp;", "&")
+            return link_limpo.strip()
+
     return ""
 
 def extrair_url_pura_href(corpo_html: str, termo_busca: str = "http") -> str:
@@ -212,7 +221,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             except Exception:
                 diferenca_segundos = 0
 
-            # LIMITE DE TEMPO: REGRA DE 15 MINUTOS (900 SEGUNDOS)
+            # REGRA EXATA DOS 15 MINUTOS (900 SEGUNDOS)
             if diferenca_segundos > 900 or diferenca_segundos < -300:
                 continue
 
@@ -268,7 +277,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 elif match_cod_vip:
                     return f"✅ **Código de Redefinição Encontrado!**\n\n🔑 Código: `{match_cod_vip.group(0)}`\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
 
-            # 2. NETFLIX RESIDÊNCIA E CÓDIGOS TEMPORÁRIOS ("RECEBER CÓDIGO" / "SIM, FUI EU")
+            # 2. NETFLIX RESIDÊNCIA E CÓDIGOS TEMPORÁRIOS ("RECEBER CÓDIGO")
             eh_email_residencia = (
                 "código de acesso temporário" in assunto or "código de acesso temporário" in corpo_texto_puro.lower() or
                 "acesso temporário" in assunto or "acesso temporário" in corpo_texto_puro.lower() or
