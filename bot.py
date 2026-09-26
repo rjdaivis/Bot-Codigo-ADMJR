@@ -22,6 +22,7 @@ logging.basicConfig(
 TOKEN_TELEGRAM = os.environ.get("TOKEN_TELEGRAM", "SEU_TOKEN_AQUI")
 ADMIN_ID = 7496198484
 
+# --- BASE FIXA DE CLIENTES PERMANENTES (NUNCA SUMIRÃO AO ATUALIZAR/REINICIAR) ---
 CLIENTES_FIXOS_PADRAO = {
     "7496198484": {
         "emails_permitidos": {"*": "2030-12-31"},
@@ -59,6 +60,13 @@ CLIENTES_FIXOS_PADRAO = {
             "elimira.n.dael.lo@gmail.com": "2026-12-31"
         },
         "permitir_sensivel": False
+    },
+    # Adicionado o cliente dos prints para liberação permanente
+    "2082696204": {
+        "emails_permitidos": {
+            "adm.jr.mar.t.h.a@gmail.com": "2026-12-31"
+        },
+        "permitir_sensivel": False
     }
 }
 
@@ -71,6 +79,8 @@ def home():
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app_flask.run(host='0.0.0.0', port=port)
+
+# --- Gerenciamento JSON com Fusão Permanente ---
 
 def carregar_json(caminho: str) -> dict:
     dados = {}
@@ -134,14 +144,12 @@ def extrair_apenas_texto_visivel(html_str: str) -> str:
     texto = re.sub(r'\s+', ' ', texto)
     return texto.strip()
 
-# --- EXTRATOR DE LINK EXATO DO BOTÃO NETFLIX ---
 def extrair_link_netflix_html(corpo_html: str) -> str:
     if not corpo_html:
         return ""
     
     matches = re.findall(r'href=["\'](https?://[^"\']+)["\']', corpo_html, re.IGNORECASE)
     
-    # 1. Prioridade absoluta: Link exato do botão "Receber código" / "Atualizar Residência"
     for link in matches:
         link_lower = link.lower()
         if "netflix.com" in link_lower and any(p in link_lower for p in ["accountaccess", "update-primary-location", "nftoken"]):
@@ -149,14 +157,12 @@ def extrair_link_netflix_html(corpo_html: str) -> str:
                 link_limpo = link.replace("&#x3D;", "=").replace("&amp;", "&")
                 return link_limpo.strip()
 
-    # 2. Segunda prioridade: qualquer link de verificação válido da Netflix
     for link in matches:
         link_lower = link.lower()
         if "netflix.com" in link_lower and "nftoken" in link_lower:
             link_limpo = link.replace("&#x3D;", "=").replace("&amp;", "&")
             return link_limpo.strip()
 
-    # 3. Fallback para links válidos
     for link in matches:
         if "netflix.com" in link.lower() and not any(x in link.lower() for x in ["unsubscribe", "help", "privacy", "terms", "twitter", "facebook"]):
             link_limpo = link.replace("&#x3D;", "=").replace("&amp;", "&")
@@ -221,7 +227,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             except Exception:
                 diferenca_segundos = 0
 
-            # REGRA EXATA DOS 15 MINUTOS (900 SEGUNDOS)
+            # LIMITE DE TEMPO: EXACTAMENTE 15 MINUTOS (900 SEGUNDOS)
             if diferenca_segundos > 900 or diferenca_segundos < -300:
                 continue
 
@@ -277,7 +283,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 elif match_cod_vip:
                     return f"✅ **Código de Redefinição Encontrado!**\n\n🔑 Código: `{match_cod_vip.group(0)}`\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
 
-            # 2. NETFLIX RESIDÊNCIA E CÓDIGOS TEMPORÁRIOS ("RECEBER CÓDIGO")
+            # 2. NETFLIX RESIDÊNCIA E CÓDIGOS TEMPORÁRIOS
             eh_email_residencia = (
                 "código de acesso temporário" in assunto or "código de acesso temporário" in corpo_texto_puro.lower() or
                 "acesso temporário" in assunto or "acesso temporário" in corpo_texto_puro.lower() or
