@@ -22,7 +22,6 @@ logging.basicConfig(
 TOKEN_TELEGRAM = os.environ.get("TOKEN_TELEGRAM", "SEU_TOKEN_AQUI")
 ADMIN_ID = 7496198484
 
-# --- BASE FIXA DE CLIENTES PERMANENTES (NUNCA SUMIRÃO AO ATUALIZAR/REINICIAR) ---
 CLIENTES_FIXOS_PADRAO = {
     "7496198484": {
         "emails_permitidos": {"*": "2030-12-31"},
@@ -61,10 +60,15 @@ CLIENTES_FIXOS_PADRAO = {
         },
         "permitir_sensivel": False
     },
-    # Adicionado o cliente dos prints para liberação permanente
     "2082696204": {
         "emails_permitidos": {
             "adm.jr.mar.t.h.a@gmail.com": "2026-12-31"
+        },
+        "permitir_sensivel": False
+    },
+    "5692675330": {
+        "emails_permitidos": {
+            "polyad.mj.r8.2and@gmail.com": "2026-12-31"
         },
         "permitir_sensivel": False
     }
@@ -79,8 +83,6 @@ def home():
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app_flask.run(host='0.0.0.0', port=port)
-
-# --- Gerenciamento JSON com Fusão Permanente ---
 
 def carregar_json(caminho: str) -> dict:
     dados = {}
@@ -149,7 +151,6 @@ def extrair_link_netflix_html(corpo_html: str) -> str:
         return ""
     
     matches = re.findall(r'href=["\'](https?://[^"\']+)["\']', corpo_html, re.IGNORECASE)
-    
     for link in matches:
         link_lower = link.lower()
         if "netflix.com" in link_lower and any(p in link_lower for p in ["accountaccess", "update-primary-location", "nftoken"]):
@@ -192,7 +193,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
     mail = None
     try:
-        socket.setdefaulttimeout(8)
+        socket.setdefaulttimeout(4)
         mail = imaplib.IMAP4_SSL(host, porta)
         mail.login(email_usuario, senha)
         mail.select("INBOX", readonly=True)
@@ -204,7 +205,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             return "⚠️ Nenhum e-mail encontrado na caixa de entrada."
 
         id_list = messages[0].split()
-        ultimos_ids = id_list[-8:]
+        ultimos_ids = id_list[-5:]
         ultimos_ids.reverse()
 
         agora = datetime.now(timezone.utc)
@@ -227,7 +228,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             except Exception:
                 diferenca_segundos = 0
 
-            # LIMITE DE TEMPO: EXACTAMENTE 15 MINUTOS (900 SEGUNDOS)
             if diferenca_segundos > 900 or diferenca_segundos < -300:
                 continue
 
@@ -283,18 +283,25 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 elif match_cod_vip:
                     return f"✅ **Código de Redefinição Encontrado!**\n\n🔑 Código: `{match_cod_vip.group(0)}`\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
 
-            # 2. NETFLIX RESIDÊNCIA E CÓDIGOS TEMPORÁRIOS
+            # 2. NETFLIX CÓDIGO DIRETO OU LINK RESIDÊNCIA
             eh_email_residencia = (
                 "código de acesso temporário" in assunto or "código de acesso temporário" in corpo_texto_puro.lower() or
                 "acesso temporário" in assunto or "acesso temporário" in corpo_texto_puro.lower() or
                 "atualizar sua residência" in assunto or "atualizar a residência" in corpo_texto_puro.lower() or 
                 "sim, fui eu" in corpo_texto_puro.lower() or "receber código" in corpo_texto_puro.lower() or
-                "solicitação de código de acesso temporário" in corpo_texto_puro.lower()
+                "confirme com o código" in assunto or "confirme com o código" in corpo_texto_puro.lower()
             )
 
             if eh_email_residencia or "netflix" in remetente:
+                # Primeiro procura por código numérico direto (ex: 685605)
+                match_codigo_direto = re.search(r'\b(?!(?:19|20)\d{2}\b)\d{4,6}\b', corpo_texto_puro)
                 link_netflix = extrair_link_netflix_html(corpo_html)
-                if link_netflix:
+
+                if "confirme com o código" in corpo_texto_puro.lower() and match_codigo_direto:
+                    mail.close()
+                    mail.logout()
+                    return f"✅ **Código Encontrado!**\n\n🔑 Seu código é: `{match_codigo_direto.group(0)}`\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
+                elif link_netflix:
                     mail.close()
                     mail.logout()
                     return (
@@ -302,8 +309,12 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         f"🔗 Clique no link abaixo para obter o código:\n{link_netflix}\n\n"
                         f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
                     )
+                elif match_codigo_direto:
+                    mail.close()
+                    mail.logout()
+                    return f"✅ **Código Encontrado!**\n\n🔑 Seu código é: `{match_codigo_direto.group(0)}`\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
 
-            # 3. CÓDIGOS NUMÉRICOS DE ACESSO
+            # 3. CÓDIGOS NUMÉRICOS GERAIS
             match_codigo_solto = re.search(r'\b(?!(?:19|20)\d{2}\b)\d{4,6}\b', corpo_texto_puro)
             if match_codigo_solto:
                 codigo_encontrado = match_codigo_solto.group(0)
@@ -324,8 +335,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 mail.logout()
         except Exception:
             pass
-
-# --- Handlers Telegram ---
 
 from telegram import Update
 from telegram.ext import (
