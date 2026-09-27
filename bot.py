@@ -63,7 +63,9 @@ CLIENTES_FIXOS_PADRAO = {
     "2082696204": {
         "emails_permitidos": {
             "adm.jr.mar.t.h.a@gmail.com": "2026-12-31",
-            "cass.ia.a.d.m.jr@gmail.com": "2026-12-31"
+            "cass.ia.a.d.m.jr@gmail.com": "2026-12-31",
+            "marload.m.j.r2.00.0@gmail.com": "2026-12-31",
+            "mario.admjr2000@gmail.com": "2026-12-31"
         },
         "permitir_sensivel": False
     },
@@ -275,7 +277,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     return "🚫 **Solicitação Não Permitida!**\n\nEste e-mail trata de redefinição de senha ou alteração de dados."
 
                 link_vip = extrair_url_pura_href(corpo_html, "http")
-                match_cod_vip = re.search(r'\b(?!(?:19|20)\d{2}\b)\d{4,8}\b', corpo_texto_puro)
+                match_cod_vip = re.search(r'\b\d{4,8}\b', corpo_texto_puro)
                 
                 mail.close()
                 mail.logout()
@@ -284,26 +286,29 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 elif match_cod_vip:
                     return f"✅ **Código de Redefinição Encontrado!**\n\n🔑 Código: `{match_cod_vip.group(0)}`\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
 
-            # 2. NETFLIX ATUALIZAR RESIDÊNCIA / CÓDIGO TEMPORÁRIO
+            # 2. NETFLIX CÓDIGO DIRETO OU LINK RESIDÊNCIA (INCLUINDO CÓDIGOS COM ZERO À ESQUERDA)
             eh_email_residencia = (
-                "você pediu para atualizar sua residência" in assunto or
-                "atualizar sua residência" in assunto or "atualizar a residência" in corpo_texto_puro.lower() or
                 "código de acesso temporário" in assunto or "código de acesso temporário" in corpo_texto_puro.lower() or
                 "acesso temporário" in assunto or "acesso temporário" in corpo_texto_puro.lower() or
+                "atualizar sua residência" in assunto or "atualizar a residência" in corpo_texto_puro.lower() or 
                 "sim, fui eu" in corpo_texto_puro.lower() or "receber código" in corpo_texto_puro.lower() or
                 "confirme com o código" in assunto or "confirme com o código" in corpo_texto_puro.lower()
             )
 
             if eh_email_residencia or "netflix" in remetente:
-                match_codigo_direto = re.search(r'\b(?!(?:19|20)\d{2}\b)\d{4,6}\b', corpo_texto_puro)
+                match_codigo_direto = re.search(r'\b\d{4,6}\b', corpo_texto_puro)
                 link_netflix = extrair_link_netflix_html(corpo_html)
 
-                if link_netflix:
+                if "confirme com o código" in corpo_texto_puro.lower() and match_codigo_direto:
+                    mail.close()
+                    mail.logout()
+                    return f"✅ **Código Encontrado!**\n\n🔑 Seu código é: `{match_codigo_direto.group(0)}`\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
+                elif link_netflix:
                     mail.close()
                     mail.logout()
                     return (
-                        f"✅ **Link de Atualização de Residência / Netflix Encontrado!**\n\n"
-                        f"🔗 Clique no link abaixo para confirmar:\n{link_netflix}\n\n"
+                        f"✅ **Link de Acesso Temporário / Residência Netflix Encontrado!**\n\n"
+                        f"🔗 Clique no link abaixo para obter o código:\n{link_netflix}\n\n"
                         f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
                     )
                 elif match_codigo_direto:
@@ -312,7 +317,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     return f"✅ **Código Encontrado!**\n\n🔑 Seu código é: `{match_codigo_direto.group(0)}`\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
 
             # 3. CÓDIGOS NUMÉRICOS GERAIS
-            match_codigo_solto = re.search(r'\b(?!(?:19|20)\d{2}\b)\d{4,6}\b', corpo_texto_puro)
+            match_codigo_solto = re.search(r'\b\d{4,6}\b', corpo_texto_puro)
             if match_codigo_solto:
                 codigo_encontrado = match_codigo_solto.group(0)
                 mail.close()
