@@ -71,7 +71,15 @@ CLIENTES_FIXOS_PADRAO = {
     },
     "5692675330": {
         "emails_permitidos": {
-            "polyad.mj.r8.2and@gmail.com": "2026-12-31"
+            "polyad.mj.r8.2and@gmail.com": "2026-12-31",
+            "polyadmjr.82and@gmail.com": "2026-12-31",
+            "marianna.admjr@outlook.com": "2026-12-31"
+        },
+        "permitir_sensivel": False
+    },
+    "8096119496": {
+        "emails_permitidos": {
+            "elimiran.d.ael.l.o@gmail.com": "2026-12-31"
         },
         "permitir_sensivel": False
     }
@@ -186,17 +194,23 @@ def extrair_url_pura_href(corpo_html: str, termo_busca: str = "http") -> str:
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
-    host = dados_conta.get("host_imap", "imap.gmail.com")
+    email_solicitado = dados_conta.get("email_destinatario", "").lower()
+    
+    # Define o servidor IMAP conforme o provedor (Outlook vs Gmail)
+    if "outlook" in email_usuario or "hotmail" in email_usuario or "live" in email_usuario:
+        host = dados_conta.get("host_imap", "outlook.office365.com")
+    else:
+        host = dados_conta.get("host_imap", "imap.gmail.com")
+        
     porta = dados_conta.get("porta", 993)
     senha = dados_conta.get("senha_imap")
-    email_solicitado = dados_conta.get("email_destinatario", "").lower()
     
     email_solicitado_norm = normalizar_email_gmail(email_solicitado)
     email_usuario_norm = normalizar_email_gmail(email_usuario)
 
     mail = None
     try:
-        socket.setdefaulttimeout(4)
+        socket.setdefaulttimeout(5)
         mail = imaplib.IMAP4_SSL(host, porta)
         mail.login(email_usuario, senha)
         mail.select("INBOX", readonly=True)
@@ -208,7 +222,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             return "⚠️ Nenhum e-mail encontrado na caixa de entrada."
 
         id_list = messages[0].split()
-        ultimos_ids = id_list[-5:]
+        ultimos_ids = id_list[-6:]
         ultimos_ids.reverse()
 
         agora = datetime.now(timezone.utc)
@@ -231,7 +245,8 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             except Exception:
                 diferenca_segundos = 0
 
-            if diferenca_segundos > 900 or diferenca_segundos < -300:
+            # JANELA DE SEGURANÇA: MÁXIMO DE 20 MINUTOS (1200 SEGUNDOS)
+            if diferenca_segundos > 1200 or diferenca_segundos < -300:
                 continue
 
             assunto = str(msg.get("Subject", "")).lower()
@@ -286,11 +301,13 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 elif match_cod_vip:
                     return f"✅ **Código de Redefinição Encontrado!**\n\n🔑 Código: `{match_cod_vip.group(0)}`\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
 
-            # 2. NETFLIX CÓDIGO DIRETO OU LINK RESIDÊNCIA (INCLUINDO CÓDIGOS COM ZERO À ESQUERDA)
+            # 2. NETFLIX ATUALIZAR RESIDÊNCIA E CÓDIGOS TEMPORÁRIOS
             eh_email_residencia = (
+                "como atualizar sua residência" in assunto or
+                "você pediu para atualizar sua residência" in assunto or
+                "atualizar sua residência" in assunto or "atualizar a residência" in corpo_texto_puro.lower() or
                 "código de acesso temporário" in assunto or "código de acesso temporário" in corpo_texto_puro.lower() or
                 "acesso temporário" in assunto or "acesso temporário" in corpo_texto_puro.lower() or
-                "atualizar sua residência" in assunto or "atualizar a residência" in corpo_texto_puro.lower() or 
                 "sim, fui eu" in corpo_texto_puro.lower() or "receber código" in corpo_texto_puro.lower() or
                 "confirme com o código" in assunto or "confirme com o código" in corpo_texto_puro.lower()
             )
@@ -299,16 +316,12 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 match_codigo_direto = re.search(r'\b\d{4,6}\b', corpo_texto_puro)
                 link_netflix = extrair_link_netflix_html(corpo_html)
 
-                if "confirme com o código" in corpo_texto_puro.lower() and match_codigo_direto:
-                    mail.close()
-                    mail.logout()
-                    return f"✅ **Código Encontrado!**\n\n🔑 Seu código é: `{match_codigo_direto.group(0)}`\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
-                elif link_netflix:
+                if link_netflix:
                     mail.close()
                     mail.logout()
                     return (
-                        f"✅ **Link de Acesso Temporário / Residência Netflix Encontrado!**\n\n"
-                        f"🔗 Clique no link abaixo para obter o código:\n{link_netflix}\n\n"
+                        f"✅ **Link de Atualização de Residência / Netflix Encontrado!**\n\n"
+                        f"🔗 Clique no link abaixo para confirmar:\n{link_netflix}\n\n"
                         f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
                     )
                 elif match_codigo_direto:
@@ -326,7 +339,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
         mail.close()
         mail.logout()
-        return "⚠️ Nenhum e-mail recente (últimos 15 minutos) com código ou link válido foi localizado nesta caixa."
+        return "⚠️ Nenhum e-mail recente (últimos 20 minutos) com código ou link válido foi localizado nesta caixa."
 
     except Exception as e:
         logging.error(f"Erro IMAP: {e}")
@@ -358,7 +371,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"👋 **Central de Liberação de Códigos**\n\n"
         f"🆔 **Seu ID do Telegram:** `{user_id}`\n\n"
-        f"Envie o e-mail cadastrado abaixo para buscar códigos/links recentes (últimos 15 min).",
+        f"Envie o e-mail cadastrado abaixo para buscar códigos/links recentes (últimos 20 min).",
         parse_mode="Markdown"
     )
 
