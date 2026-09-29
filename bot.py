@@ -12,6 +12,7 @@ import time
 from threading import Thread
 from flask import Flask
 from email.utils import parsedate_to_datetime
+from email.header import decode_header
 from datetime import datetime, timezone, timedelta
 
 logging.basicConfig(
@@ -138,6 +139,21 @@ def normalizar_email_gmail(email_str: str) -> str:
         return f"{usuario}@{dominio}"
     return email_str.strip().lower()
 
+def decodificar_assunto(assunto_raw: str) -> str:
+    if not assunto_raw:
+        return ""
+    try:
+        partes = decode_header(assunto_raw)
+        texto_decodificado = ""
+        for conteudo, charset in partes:
+            if isinstance(conteudo, bytes):
+                texto_decodificado += conteudo.decode(charset or 'utf-8', errors='ignore')
+            else:
+                texto_decodificado += str(conteudo)
+        return texto_decodificado
+    except Exception:
+        return assunto_raw
+
 def tratar_quopri_e_html(payload_bytes: bytes) -> str:
     if not payload_bytes:
         return ""
@@ -240,9 +256,8 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             if diferenca_segundos > 1200 or diferenca_segundos < -300:
                 continue
 
-            assunto_original = str(msg.get("Subject", ""))
+            assunto_original = decodificar_assunto(str(msg.get("Subject", "")))
             assunto_lower = assunto_original.lower()
-            remetente = str(msg.get("From", "")).lower()
 
             corpo_bruto = b""
             if msg.is_multipart():
@@ -264,38 +279,51 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
             minutos = max(1, int(diferenca_segundos // 60)) if diferenca_segundos > 0 else 1
 
-            # 1. BLOQUEIO DE SEGURANÇA VIP (REDEFINIÇÃO DE SENHA)
+            # 1. SEGURANÇA VIP (REDEFINIÇÃO DE SENHA)
             if "redefinir" in assunto_lower or "recuperar senha" in assunto_lower or "reset-password" in corpo_html.lower():
                 if not pode_acessar_sensivel:
                     mail.close()
                     mail.logout()
                     return "🚫 **Solicitação Não Permitida!**\n\nEste e-mail trata de redefinição de senha ou alteração de dados."
 
-            # 2. EXTRAÇÃO COMPLETA: PEGA TUDO O QUE EXISTIR NO E-MAIL
-            link_encontrado = extrair_link_netflix_html(corpo_html) or extrair_url_pura_href(corpo_html, "http")
-            
-            codigos_encontrados = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
-            codigo_valido = None
-            for c in codigos_encontrados:
-                if not c.startswith("0800"):
-                    codigo_valido = c
-                    break
+            # 2. CÓDIGO DE ENTRADA / ACESSO -> APENAS CÓDIGO
+            if "código de acesso" in assunto_lower or "código de verificação" in assunto_lower:
+                codigos = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
+                for cod in codigos:
+                    if not cod.startswith("0800"):
+                        mail.close()
+                        mail.logout()
+                        return f"✅ **Código Encontrado!**\n\n🔑 Seu código é: `{cod}`\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
 
-            # Se encontrou código OU link, entrega a mensagem completa
-            if codigo_valido or link_encontrado:
+            # 3. VERIFICAÇÃO / RESIDÊNCIA -> APENAS LINK
+            if "confirme" in assunto_lower or "endereço" in assunto_lower or "residência" in assunto_lower or "atualizar" in assunto_lower:
+                link_netflix = extrair_link_netflix_html(corpo_html)
+                if link_netflix:
+                    mail.close()
+                    mail.logout()
+                    return (
+                        f"✅ **Link Encontrado!**\n\n"
+                        f"🔗 Clique no link abaixo para confirmar:\n{link_netflix}\n\n"
+                        f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
+                    )
+
+            # 4. CASO GENÉRICO -> PEGA O QUE TIVER
+            codigos_encontrados = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
+            codigo_valido = next((c for c in codigos_encontrados if not c.startswith("0800")), None)
+            link_encontrado = extrair_link_netflix_html(corpo_html) or extrair_url_pura_href(corpo_html, "http")
+
+            if codigo_valido:
                 mail.close()
                 mail.logout()
-
-                resposta = f"📩 **E-mail Encontrado:** `{assunto_original}`\n\n"
-                
-                if codigo_valido:
-                    resposta += f"🔑 **Código:** `{codigo_valido}`\n\n"
-                
-                if link_encontrado:
-                    resposta += f"🔗 **Link:**\n{link_encontrado}\n\n"
-                
-                resposta += f"⏱️ *Recebido há {minutos} minuto(s).*"
-                return resposta
+                return f"✅ **Código Encontrado!**\n\n🔑 Seu código é: `{codigo_valido}`\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
+            elif link_encontrado:
+                mail.close()
+                mail.logout()
+                return (
+                    f"✅ **Link Encontrado!**\n\n"
+                    f"🔗 Link:\n{link_encontrado}\n\n"
+                    f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
+                )
 
         mail.close()
         mail.logout()
