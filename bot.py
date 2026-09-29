@@ -208,7 +208,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
     mail = None
     try:
-        socket.setdefaulttimeout(8)
+        socket.setdefaulttimeout(10)
         mail = imaplib.IMAP4_SSL(host, porta)
         mail.login(email_usuario, senha)
         mail.select("INBOX", readonly=True)
@@ -243,7 +243,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             except Exception:
                 diferenca_segundos = 0
 
-            if diferenca_segundos > 1500 or diferenca_segundos < -300:
+            if diferenca_segundos > 1200 or diferenca_segundos < -300:
                 continue
 
             assunto = str(msg.get("Subject", "")).lower()
@@ -301,7 +301,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             if eh_email_netflix_link or "netflix" in remetente:
                 link_netflix = extrair_link_netflix_html(corpo_html)
                 
-                # Procura por códigos de verificação (ignorando 0800)
                 codigos_encontrados = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
                 codigo_valido = None
                 for c in codigos_encontrados:
@@ -330,7 +329,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         f"⏱️️ *E-mail recebido há {minutos} minuto(s).*"
                     )
 
-            # 3. CÓDIGOS NUMÉRICOS GERAIS (IGNORANDO 0800)
+            # 3. CÓDIGOS NUMÉRICOS GERAIS
             codigos_gerais = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
             for cod in codigos_gerais:
                 if not cod.startswith("0800"):
@@ -503,7 +502,7 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
 
     if not conta_encontrada:
         await update.message.reply_text(
-            f"⚠️ Nenhum e-mail recente com código ou link válido foi localizado nesta caixa.",
+            f"❌ A conta `{email_original}` não possui as credenciais cadastradas no `contas.json`.",
             parse_mode="Markdown"
         )
         return
@@ -514,20 +513,15 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
 
     loop = asyncio.get_running_loop()
     try:
-        resultado = await asyncio.wait_for(
-            loop.run_in_executor(
-                None, 
-                extrair_codigo_imap_wrapper, 
-                {**conta_encontrada, "email_usuario": email_login, "email_destinatario": email_original}, 
-                pode_acessar_sensivel
-            ),
-            timeout=12.0
+        resultado = await loop.run_in_executor(
+            None, 
+            extrair_codigo_imap_wrapper, 
+            {**conta_encontrada, "email_usuario": email_login, "email_destinatario": email_original}, 
+            pode_acessar_sensivel
         )
-    except asyncio.TimeoutError:
-        resultado = "⚠️ Nenhum e-mail recente com código ou link válido foi localizado nesta caixa."
     except Exception as err:
         logging.error(f"Erro na execução da busca: {err}")
-        resultado = "⚠️ Nenhum e-mail recente com código ou link válido foi localizado nesta caixa."
+        resultado = "❌ Ocorreu uma falha temporária ao consultar a caixa de e-mail."
 
     try:
         await msg_carregando.edit_text(resultado, parse_mode="Markdown")
