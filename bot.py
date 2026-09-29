@@ -291,45 +291,46 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 elif match_cod_vip:
                     return f"✅ **Código de Redefinição Encontrado!**\n\n🔑 Código: `{match_cod_vip.group(0)}`\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
 
-            # 2. NETFLIX VERIFICAÇÃO / RESIDÊNCIA / CÓDIGO
-            eh_email_netflix_link = (
-                "verificar seu endereço" in assunto or "verificar email" in corpo_texto_puro.lower() or
-                "residência" in assunto or "residência" in corpo_texto_puro.lower() or
-                "acesso temporário" in assunto or "acesso temporário" in corpo_texto_puro.lower()
+            # 2. SE FOR E-MAIL DE CÓDIGO DIRETO DA NETFLIX
+            eh_email_codigo_puro = (
+                "código de acesso" in assunto or 
+                "código de verificação" in assunto
             )
 
-            if eh_email_netflix_link or "netflix" in remetente:
-                link_netflix = extrair_link_netflix_html(corpo_html)
-                
+            if eh_email_codigo_puro:
                 codigos_encontrados = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
                 codigo_valido = None
                 for c in codigos_encontrados:
                     if not c.startswith("0800"):
                         codigo_valido = c
                         break
+                
+                if codigo_valido:
+                    mail.close()
+                    mail.logout()
+                    return f"✅ **Código Encontrado!**\n\n🔑 Seu código é: `{codigo_valido}`\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
 
-                if link_netflix and ("verificar" in assunto or "residência" in assunto or "atualizar" in assunto or "solicitação" in corpo_texto_puro.lower()):
+            # 3. SE FOR E-MAIL DE LINK/CONFIRMAÇÃO/RESIDÊNCIA
+            eh_email_link_puro = (
+                "confirme seu endereço" in assunto or 
+                "verificar seu endereço" in assunto or 
+                "verificar email" in corpo_texto_puro.lower() or
+                "residência" in assunto or 
+                "atualizar sua residência" in assunto
+            )
+
+            if eh_email_link_puro or "netflix" in remetente:
+                link_netflix = extrair_link_netflix_html(corpo_html)
+                if link_netflix:
                     mail.close()
                     mail.logout()
                     return (
                         f"✅ **Link de Verificação / Residência Netflix Encontrado!**\n\n"
                         f"🔗 Clique no link abaixo para confirmar:\n{link_netflix}\n\n"
-                        f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
-                    )
-                elif codigo_valido:
-                    mail.close()
-                    mail.logout()
-                    return f"✅ **Código Encontrado!**\n\n🔑 Seu código é: `{codigo_valido}`\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
-                elif link_netflix:
-                    mail.close()
-                    mail.logout()
-                    return (
-                        f"✅ **Link Encontrado!**\n\n"
-                        f"🔗 Link:\n{link_netflix}\n\n"
                         f"⏱️️ *E-mail recebido há {minutos} minuto(s).*"
                     )
 
-            # 3. CÓDIGOS NUMÉRICOS GERAIS
+            # 4. BUSCA GENÉRICA
             codigos_gerais = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
             for cod in codigos_gerais:
                 if not cod.startswith("0800"):
