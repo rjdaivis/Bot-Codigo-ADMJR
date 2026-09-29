@@ -200,15 +200,11 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
     mail = None
     try:
-        socket.setdefaulttimeout(10)
+        socket.setdefaulttimeout(15)
         mail = imaplib.IMAP4_SSL(host, porta)
         mail.login(email_usuario, senha)
         mail.select("INBOX", readonly=True)
-    except Exception as err_conexao:
-        logging.error(f"Erro ao autenticar IMAP para {email_usuario}: {err_conexao}")
-        return "❌ Falha de login IMAP. Verifique a Senha de App no contas.json."
 
-    try:
         status, messages = mail.search(None, "ALL")
         if status != "OK" or not messages[0]:
             mail.close()
@@ -239,7 +235,8 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             except Exception:
                 diferenca_segundos = 0
 
-            if diferenca_segundos > 1500 or diferenca_segundos < -300:
+            # Janela de aceitação de e-mails recentes (até 20 min)
+            if diferenca_segundos > 1200 or diferenca_segundos < -300:
                 continue
 
             assunto = str(msg.get("Subject", "")).lower()
@@ -287,22 +284,19 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 elif match_cod_vip:
                     return f"✅ **Código de Redefinição Encontrado!**\n\n🔑 Código: `{match_cod_vip.group(0)}`\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
 
-            # 2. NETFLIX ATUALIZAR RESIDÊNCIA E CÓDIGOS TEMPORÁRIOS
+            # 2. NETFLIX CÓDIGO OU LINK RESIDÊNCIA
             eh_email_residencia = (
-                "como atualizar sua residência" in assunto or
-                "você pediu para atualizar sua residência" in assunto or
-                "atualizar sua residência" in assunto or "atualizar a residência" in corpo_texto_puro.lower() or
-                "código de acesso temporário" in assunto or "código de acesso temporário" in corpo_texto_puro.lower() or
+                "residência" in assunto or "residência" in corpo_texto_puro.lower() or
                 "acesso temporário" in assunto or "acesso temporário" in corpo_texto_puro.lower() or
-                "sim, fui eu" in corpo_texto_puro.lower() or "receber código" in corpo_texto_puro.lower() or
-                "confirme com o código" in assunto or "confirme com o código" in corpo_texto_puro.lower()
+                "confirme com o código" in assunto or "confirme com o código" in corpo_texto_puro.lower() or
+                "código de verificação" in assunto or "código de acesso" in assunto
             )
 
             if eh_email_residencia or "netflix" in remetente:
                 match_codigo_direto = re.search(r'\b\d{4,6}\b', corpo_texto_puro)
                 link_netflix = extrair_link_netflix_html(corpo_html)
 
-                if link_netflix:
+                if link_netflix and ("residência" in assunto or "atualizar" in assunto or "solicitação" in corpo_texto_puro.lower()):
                     mail.close()
                     mail.logout()
                     return (
@@ -314,6 +308,14 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     mail.close()
                     mail.logout()
                     return f"✅ **Código Encontrado!**\n\n🔑 Seu código é: `{match_codigo_direto.group(0)}`\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
+                elif link_netflix:
+                    mail.close()
+                    mail.logout()
+                    return (
+                        f"✅ **Link Encontrado!**\n\n"
+                        f"🔗 Link:\n{link_netflix}\n\n"
+                        f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
+                    )
 
             # 3. CÓDIGOS NUMÉRICOS GERAIS
             match_codigo_solto = re.search(r'\b\d{4,6}\b', corpo_texto_puro)
@@ -328,8 +330,8 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
         return "⚠️ Nenhum e-mail recente com código ou link válido foi localizado nesta caixa."
 
     except Exception as e:
-        logging.error(f"Erro IMAP: {e}")
-        return "❌ Erro ao ler mensagens da caixa de entrada."
+        logging.error(f"Erro IMAP para {email_usuario}: {e}")
+        return "❌ O servidor de e-mail demorou para responder. Tente novamente em alguns segundos."
     finally:
         try:
             if mail:
@@ -477,11 +479,6 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
             return
 
     email_base = normalizar_email_gmail(email_original)
-    
-    # Mapeamentos automáticos para aliasing de e-mails
-    if "marianna" in email_original or "outlook" in email_original:
-        email_base = "polyadmjr.82and@gmail.com"
-
     contas = carregar_json("contas.json")
     
     conta_encontrada = None
