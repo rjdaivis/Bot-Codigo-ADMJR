@@ -291,13 +291,14 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 elif match_cod_vip:
                     return f"✅ **Código de Redefinição Encontrado!**\n\n🔑 Código: `{match_cod_vip.group(0)}`\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
 
-            # 2. SE FOR E-MAIL DE CÓDIGO DIRETO DA NETFLIX
+            # 2. SE FOR E-MAIL DE CÓDIGO DA NETFLIX (PRIORIDADE TOTAL PARA O CÓDIGO NUMÉRICO)
             eh_email_codigo_puro = (
                 "código de acesso" in assunto or 
-                "código de verificação" in assunto
+                "código de verificação" in assunto or
+                "código" in assunto
             )
 
-            if eh_email_codigo_puro:
+            if eh_email_codigo_puro or ("netflix" in remetente and "código" in corpo_texto_puro.lower()):
                 codigos_encontrados = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
                 codigo_valido = None
                 for c in codigos_encontrados:
@@ -310,7 +311,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     mail.logout()
                     return f"✅ **Código Encontrado!**\n\n🔑 Seu código é: `{codigo_valido}`\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
 
-            # 3. SE FOR E-MAIL DE LINK/CONFIRMAÇÃO/RESIDÊNCIA
+            # 3. SE FOR E-MAIL DE LINK / CONFIRMAÇÃO / RESIDÊNCIA
             eh_email_link_puro = (
                 "confirme seu endereço" in assunto or 
                 "verificar seu endereço" in assunto or 
@@ -327,10 +328,10 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     return (
                         f"✅ **Link de Verificação / Residência Netflix Encontrado!**\n\n"
                         f"🔗 Clique no link abaixo para confirmar:\n{link_netflix}\n\n"
-                        f"⏱️️ *E-mail recebido há {minutos} minuto(s).*"
+                        f"⏱ *E-mail recebido há {minutos} minuto(s).*"
                     )
 
-            # 4. BUSCA GENÉRICA
+            # 4. BUSCA GENÉRICA DE CÓDIGO
             codigos_gerais = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
             for cod in codigos_gerais:
                 if not cod.startswith("0800"):
