@@ -179,15 +179,19 @@ def extrair_link_netflix_html(corpo_html: str) -> str:
         return ""
     
     matches = re.findall(r'href=["\'](https?://[^"\']+)["\']', corpo_html, re.IGNORECASE)
+    
+    # 1. Busca prioritária por links de confirmação/residência
     for link in matches:
         link_lower = link.lower()
-        if "netflix.com" in link_lower and any(p in link_lower for p in ["accountaccess", "update-primary-location", "nftoken", "verify", "confirm"]):
-            if "travel" not in link_lower and "help" not in link_lower:
+        if "netflix.com" in link_lower and any(p in link_lower for p in ["accountaccess", "update-primary-location", "nftoken", "verifyemail", "confirm"]):
+            if not any(x in link_lower for x in ["password", "travel", "help", "unsubscribe", "login"]):
                 link_limpo = link.replace("&#x3D;", "=").replace("&amp;", "&").replace("\r", "").replace("\n", "")
                 return link_limpo.strip()
 
+    # 2. Busca genérica filtrando qualquer link de senha ou conta
     for link in matches:
-        if "netflix.com" in link.lower() and not any(x in link.lower() for x in ["unsubscribe", "help", "privacy", "terms", "twitter", "facebook"]):
+        link_lower = link.lower()
+        if "netflix.com" in link_lower and not any(x in link_lower for x in ["password", "unsubscribe", "help", "privacy", "terms", "twitter", "facebook", "login"]):
             link_limpo = link.replace("&#x3D;", "=").replace("&amp;", "&").replace("\r", "").replace("\n", "")
             return link_limpo.strip()
 
@@ -198,7 +202,7 @@ def extrair_url_pura_href(corpo_html: str, termo_busca: str = "http") -> str:
         return ""
     matches = re.findall(r'href=["\'](https?://[^"\']+)["\']', corpo_html, re.IGNORECASE)
     for link in matches:
-        if termo_busca in link.lower() and not any(x in link.lower() for x in ["unsubscribe", "help", "privacy", "terms"]):
+        if termo_busca in link.lower() and not any(x in link.lower() for x in ["password", "unsubscribe", "help", "privacy", "terms"]):
             link_limpo = link.replace("&#x3D;", "=").replace("&amp;", "&").replace("\r", "").replace("\n", "")
             return link_limpo.strip()
     return ""
