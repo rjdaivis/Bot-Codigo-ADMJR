@@ -196,12 +196,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
     email_usuario = dados_conta.get("email_usuario")
     email_solicitado = dados_conta.get("email_destinatario", "").lower()
     
-    # Define o servidor IMAP conforme o provedor (Outlook vs Gmail)
-    if "outlook" in email_usuario or "hotmail" in email_usuario or "live" in email_usuario:
-        host = dados_conta.get("host_imap", "outlook.office365.com")
-    else:
-        host = dados_conta.get("host_imap", "imap.gmail.com")
-        
+    host = dados_conta.get("host_imap", "imap.gmail.com")
     porta = dados_conta.get("porta", 993)
     senha = dados_conta.get("senha_imap")
     
@@ -210,7 +205,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
     mail = None
     try:
-        socket.setdefaulttimeout(5)
+        socket.setdefaulttimeout(3)
         mail = imaplib.IMAP4_SSL(host, porta)
         mail.login(email_usuario, senha)
         mail.select("INBOX", readonly=True)
@@ -222,7 +217,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             return "⚠️ Nenhum e-mail encontrado na caixa de entrada."
 
         id_list = messages[0].split()
-        ultimos_ids = id_list[-6:]
+        ultimos_ids = id_list[-5:]
         ultimos_ids.reverse()
 
         agora = datetime.now(timezone.utc)
@@ -245,8 +240,8 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             except Exception:
                 diferenca_segundos = 0
 
-            # JANELA DE SEGURANÇA: MÁXIMO DE 20 MINUTOS (1200 SEGUNDOS)
-            if diferenca_segundos > 1200 or diferenca_segundos < -300:
+            # JANELA DE SEGURANÇA MÁXIMA DE 25 MINUTOS
+            if diferenca_segundos > 1500 or diferenca_segundos < -300:
                 continue
 
             assunto = str(msg.get("Subject", "")).lower()
@@ -269,13 +264,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
             corpo_html = tratar_quopri_e_html(corpo_bruto)
             corpo_texto_puro = extrair_apenas_texto_visivel(corpo_html)
-            
-            texto_completo = (assunto + " " + remetente + " " + corpo_texto_puro).lower()
-            destinatario_to_norm = normalizar_email_gmail(str(msg.get("To", "")))
-
-            if email_solicitado_norm and email_solicitado_norm != email_usuario_norm:
-                if email_solicitado_norm not in normalizar_email_gmail(texto_completo) and email_solicitado_norm not in destinatario_to_norm:
-                    continue
 
             minutos = max(1, int(diferenca_segundos // 60)) if diferenca_segundos > 0 else 1
 
@@ -339,7 +327,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
         mail.close()
         mail.logout()
-        return "⚠️ Nenhum e-mail recente (últimos 20 minutos) com código ou link válido foi localizado nesta caixa."
+        return "⚠️ Nenhum e-mail recente com código ou link válido foi localizado nesta caixa."
 
     except Exception as e:
         logging.error(f"Erro IMAP: {e}")
@@ -371,7 +359,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"👋 **Central de Liberação de Códigos**\n\n"
         f"🆔 **Seu ID do Telegram:** `{user_id}`\n\n"
-        f"Envie o e-mail cadastrado abaixo para buscar códigos/links recentes (últimos 20 min).",
+        f"Envie o e-mail cadastrado abaixo para buscar códigos/links recentes.",
         parse_mode="Markdown"
     )
 
@@ -491,11 +479,16 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
             return
 
     email_base = normalizar_email_gmail(email_original)
+    
+    # Redirecionamento de aliases do Outlook para a conta Gmail ativa do contas.json
+    if "marianna.admjr@outlook.com" in email_original:
+        email_base = "polyadmjr.82and@gmail.com"
+
     contas = carregar_json("contas.json")
     
     conta_encontrada = None
     for chave_email, dados in contas.items():
-        if chave_email.strip().lower() == email_original or normalizar_email_gmail(chave_email) == email_base:
+        if chave_email.strip().lower() == email_original or normalizar_email_gmail(chave_email) == email_base or normalizar_email_gmail(chave_email) == "polyadmjr82and@gmail.com":
             conta_encontrada = dados
             break
 
@@ -503,7 +496,7 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text(f"❌ A conta `{email_original}` não possui as credenciais no `contas.json`.", parse_mode="Markdown")
         return
 
-    email_login = conta_encontrada.get("email_login", email_base)
+    email_login = conta_encontrada.get("email_login", "polyadmjr.82and@gmail.com" if "marianna" in email_original else email_base)
 
     msg_carregando = await update.message.reply_text(f"⏳ Buscando e-mail recente para `{email_original}`...", parse_mode="Markdown")
 
