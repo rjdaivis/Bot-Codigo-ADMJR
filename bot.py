@@ -199,12 +199,27 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
     senha = dados_conta.get("senha_imap")
 
     mail = None
-    try:
-        socket.setdefaulttimeout(3)
-        mail = imaplib.IMAP4_SSL(host, porta)
-        mail.login(email_usuario, senha)
-        mail.select("INBOX", readonly=True)
+    for tentativa in range(1, 4):
+        try:
+            socket.setdefaulttimeout(7)
+            mail = imaplib.IMAP4_SSL(host, porta)
+            mail.login(email_usuario, senha)
+            mail.select("INBOX", readonly=True)
+            break
+        except Exception as err_conexao:
+            logging.warning(f"Tentativa {tentativa} de conexão IMAP falhou para {email_usuario}: {err_conexao}")
+            if mail:
+                try:
+                    mail.logout()
+                except Exception:
+                    pass
+            mail = None
+            if tentativa < 3:
+                time.sleep(1.5)
+            else:
+                return "❌ O servidor de e-mail demorou para responder. Tente novamente em alguns segundos."
 
+    try:
         status, messages = mail.search(None, "ALL")
         if status != "OK" or not messages[0]:
             mail.close()
@@ -235,7 +250,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             except Exception:
                 diferenca_segundos = 0
 
-            # JANELA DE 25 MINUTOS MAX
             if diferenca_segundos > 1500 or diferenca_segundos < -300:
                 continue
 
@@ -473,7 +487,6 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text(f"❌ Você não tem autorização para acessar o e-mail `{email_original}`.", parse_mode="Markdown")
             return
 
-    # Mapeamento do alias Outlook para a conta Gmail correta
     email_base = normalizar_email_gmail(email_original)
     if "marianna" in email_original or "outlook" in email_original:
         email_base = "polyadmjr.82and@gmail.com"
