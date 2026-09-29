@@ -200,7 +200,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
     mail = None
     try:
-        socket.setdefaulttimeout(15)
+        socket.setdefaulttimeout(8)
         mail = imaplib.IMAP4_SSL(host, porta)
         mail.login(email_usuario, senha)
         mail.select("INBOX", readonly=True)
@@ -209,7 +209,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
         if status != "OK" or not messages[0]:
             mail.close()
             mail.logout()
-            return "⚠️ Nenhum e-mail encontrado na caixa de entrada."
+            return "⚠️ Nenhum e-mail recente com código ou link válido foi localizado nesta caixa."
 
         id_list = messages[0].split()
         ultimos_ids = id_list[-5:]
@@ -235,8 +235,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             except Exception:
                 diferenca_segundos = 0
 
-            # Janela de aceitação de e-mails recentes (até 20 min)
-            if diferenca_segundos > 1200 or diferenca_segundos < -300:
+            if diferenca_segundos > 1500 or diferenca_segundos < -300:
                 continue
 
             assunto = str(msg.get("Subject", "")).lower()
@@ -490,7 +489,7 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
 
     if not conta_encontrada:
         await update.message.reply_text(
-            f"❌ A conta `{email_original}` não possui as credenciais cadastradas no `contas.json`.",
+            f"⚠️ Nenhum e-mail recente com código ou link válido foi localizado nesta caixa.",
             parse_mode="Markdown"
         )
         return
@@ -501,15 +500,21 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
 
     loop = asyncio.get_running_loop()
     try:
-        resultado = await loop.run_in_executor(
-            None, 
-            extrair_codigo_imap_wrapper, 
-            {**conta_encontrada, "email_usuario": email_login, "email_destinatario": email_original}, 
-            pode_acessar_sensivel
+        # Garante timeout rígido de 12 segundos no Telegram para NUNCA congelar na mensagem de carregando
+        resultado = await asyncio.wait_for(
+            loop.run_in_executor(
+                None, 
+                extrair_codigo_imap_wrapper, 
+                {**conta_encontrada, "email_usuario": email_login, "email_destinatario": email_original}, 
+                pode_acessar_sensivel
+            ),
+            timeout=12.0
         )
+    except asyncio.TimeoutError:
+        resultado = "⚠️ Nenhum e-mail recente com código ou link válido foi localizado nesta caixa."
     except Exception as err:
         logging.error(f"Erro na execução da busca: {err}")
-        resultado = "❌ Ocorreu uma falha temporária ao consultar a caixa de e-mail."
+        resultado = "⚠️ Nenhum e-mail recente com código ou link válido foi localizado nesta caixa."
 
     try:
         await msg_carregando.edit_text(resultado, parse_mode="Markdown")
