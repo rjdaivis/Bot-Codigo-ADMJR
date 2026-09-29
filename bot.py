@@ -199,25 +199,14 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
     senha = dados_conta.get("senha_imap")
 
     mail = None
-    for tentativa in range(1, 4):
-        try:
-            socket.setdefaulttimeout(7)
-            mail = imaplib.IMAP4_SSL(host, porta)
-            mail.login(email_usuario, senha)
-            mail.select("INBOX", readonly=True)
-            break
-        except Exception as err_conexao:
-            logging.warning(f"Tentativa {tentativa} de conexão IMAP falhou para {email_usuario}: {err_conexao}")
-            if mail:
-                try:
-                    mail.logout()
-                except Exception:
-                    pass
-            mail = None
-            if tentativa < 3:
-                time.sleep(1.5)
-            else:
-                return "❌ O servidor de e-mail demorou para responder. Tente novamente em alguns segundos."
+    try:
+        socket.setdefaulttimeout(10)
+        mail = imaplib.IMAP4_SSL(host, porta)
+        mail.login(email_usuario, senha)
+        mail.select("INBOX", readonly=True)
+    except Exception as err_conexao:
+        logging.error(f"Erro ao autenticar IMAP para {email_usuario}: {err_conexao}")
+        return "❌ Falha de login IMAP. Verifique a Senha de App no contas.json."
 
     try:
         status, messages = mail.search(None, "ALL")
@@ -340,7 +329,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
     except Exception as e:
         logging.error(f"Erro IMAP: {e}")
-        return "❌ O servidor de e-mail demorou para responder. Tente novamente em alguns segundos."
+        return "❌ Erro ao ler mensagens da caixa de entrada."
     finally:
         try:
             if mail:
@@ -488,6 +477,8 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
             return
 
     email_base = normalizar_email_gmail(email_original)
+    
+    # Mapeamentos automáticos para aliasing de e-mails
     if "marianna" in email_original or "outlook" in email_original:
         email_base = "polyadmjr.82and@gmail.com"
 
@@ -496,15 +487,18 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
     conta_encontrada = None
     for chave_email, dados in contas.items():
         chave_norm = normalizar_email_gmail(chave_email)
-        if chave_email.strip().lower() == email_original or chave_norm == email_base or "polyadmjr" in chave_norm:
+        if chave_email.strip().lower() == email_original or chave_norm == email_base:
             conta_encontrada = dados
             break
 
     if not conta_encontrada:
-        await update.message.reply_text(f"❌ A conta `{email_original}` não possui as credenciais no `contas.json`.", parse_mode="Markdown")
+        await update.message.reply_text(
+            f"❌ A conta `{email_original}` não possui as credenciais cadastradas no `contas.json`.",
+            parse_mode="Markdown"
+        )
         return
 
-    email_login = conta_encontrada.get("email_login", "polyadmjr.82and@gmail.com" if "marianna" in email_original else email_base)
+    email_login = conta_encontrada.get("email_login", email_base)
 
     msg_carregando = await update.message.reply_text(f"⏳ Buscando e-mail recente para `{email_original}`...", parse_mode="Markdown")
 
