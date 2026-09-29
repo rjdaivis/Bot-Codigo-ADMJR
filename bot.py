@@ -65,7 +65,8 @@ CLIENTES_FIXOS_PADRAO = {
             "adm.jr.mar.t.h.a@gmail.com": "2026-12-31",
             "cass.ia.a.d.m.jr@gmail.com": "2026-12-31",
             "marload.m.j.r2.00.0@gmail.com": "2026-12-31",
-            "mario.admjr2000@gmail.com": "2026-12-31"
+            "mario.admjr2000@gmail.com": "2026-12-31",
+            "margareth_adm.jr_fariaz@yahoo.com": "2026-12-31"
         },
         "permitir_sensivel": False
     },
@@ -164,7 +165,7 @@ def extrair_link_netflix_html(corpo_html: str) -> str:
     matches = re.findall(r'href=["\'](https?://[^"\']+)["\']', corpo_html, re.IGNORECASE)
     for link in matches:
         link_lower = link.lower()
-        if "netflix.com" in link_lower and any(p in link_lower for p in ["accountaccess", "update-primary-location", "nftoken"]):
+        if "netflix.com" in link_lower and any(p in link_lower for p in ["accountaccess", "update-primary-location", "nftoken", "verify", "confirm"]):
             if "travel" not in link_lower and "help" not in link_lower:
                 link_limpo = link.replace("&#x3D;", "=").replace("&amp;", "&")
                 return link_limpo.strip()
@@ -194,7 +195,14 @@ def extrair_url_pura_href(corpo_html: str, termo_busca: str = "http") -> str:
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
-    host = dados_conta.get("host_imap", "imap.gmail.com")
+    
+    if "yahoo" in email_usuario:
+        host = dados_conta.get("host_imap", "imap.mail.yahoo.com")
+    elif "outlook" in email_usuario or "hotmail" in email_usuario:
+        host = dados_conta.get("host_imap", "outlook.office365.com")
+    else:
+        host = dados_conta.get("host_imap", "imap.gmail.com")
+        
     porta = dados_conta.get("porta", 993)
     senha = dados_conta.get("senha_imap")
 
@@ -274,7 +282,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     return "🚫 **Solicitação Não Permitida!**\n\nEste e-mail trata de redefinição de senha ou alteração de dados."
 
                 link_vip = extrair_url_pura_href(corpo_html, "http")
-                match_cod_vip = re.search(r'\b\d{4,8}\b', corpo_texto_puro)
+                match_cod_vip = re.search(r'\b(?!0800)\d{4,8}\b', corpo_texto_puro)
                 
                 mail.close()
                 mail.logout()
@@ -283,46 +291,52 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 elif match_cod_vip:
                     return f"✅ **Código de Redefinição Encontrado!**\n\n🔑 Código: `{match_cod_vip.group(0)}`\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
 
-            # 2. NETFLIX CÓDIGO OU LINK RESIDÊNCIA
-            eh_email_residencia = (
+            # 2. NETFLIX VERIFICAÇÃO / RESIDÊNCIA / CÓDIGO
+            eh_email_netflix_link = (
+                "verificar seu endereço" in assunto or "verificar email" in corpo_texto_puro.lower() or
                 "residência" in assunto or "residência" in corpo_texto_puro.lower() or
-                "acesso temporário" in assunto or "acesso temporário" in corpo_texto_puro.lower() or
-                "confirme com o código" in assunto or "confirme com o código" in corpo_texto_puro.lower() or
-                "código de verificação" in assunto or "código de acesso" in assunto
+                "acesso temporário" in assunto or "acesso temporário" in corpo_texto_puro.lower()
             )
 
-            if eh_email_residencia or "netflix" in remetente:
-                match_codigo_direto = re.search(r'\b\d{4,6}\b', corpo_texto_puro)
+            if eh_email_netflix_link or "netflix" in remetente:
                 link_netflix = extrair_link_netflix_html(corpo_html)
+                
+                # Procura por códigos de verificação (ignorando 0800)
+                codigos_encontrados = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
+                codigo_valido = None
+                for c in codigos_encontrados:
+                    if not c.startswith("0800"):
+                        codigo_valido = c
+                        break
 
-                if link_netflix and ("residência" in assunto or "atualizar" in assunto or "solicitação" in corpo_texto_puro.lower()):
+                if link_netflix and ("verificar" in assunto or "residência" in assunto or "atualizar" in assunto or "solicitação" in corpo_texto_puro.lower()):
                     mail.close()
                     mail.logout()
                     return (
-                        f"✅ **Link de Atualização de Residência / Netflix Encontrado!**\n\n"
+                        f"✅ **Link de Verificação / Residência Netflix Encontrado!**\n\n"
                         f"🔗 Clique no link abaixo para confirmar:\n{link_netflix}\n\n"
                         f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
                     )
-                elif match_codigo_direto:
+                elif codigo_valido:
                     mail.close()
                     mail.logout()
-                    return f"✅ **Código Encontrado!**\n\n🔑 Seu código é: `{match_codigo_direto.group(0)}`\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
+                    return f"✅ **Código Encontrado!**\n\n🔑 Seu código é: `{codigo_valido}`\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
                 elif link_netflix:
                     mail.close()
                     mail.logout()
                     return (
                         f"✅ **Link Encontrado!**\n\n"
                         f"🔗 Link:\n{link_netflix}\n\n"
-                        f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
+                        f"⏱️️ *E-mail recebido há {minutos} minuto(s).*"
                     )
 
-            # 3. CÓDIGOS NUMÉRICOS GERAIS
-            match_codigo_solto = re.search(r'\b\d{4,6}\b', corpo_texto_puro)
-            if match_codigo_solto:
-                codigo_encontrado = match_codigo_solto.group(0)
-                mail.close()
-                mail.logout()
-                return f"✅ **Código Encontrado!**\n\n🔑 Seu código é: `{codigo_encontrado}`\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
+            # 3. CÓDIGOS NUMÉRICOS GERAIS (IGNORANDO 0800)
+            codigos_gerais = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
+            for cod in codigos_gerais:
+                if not cod.startswith("0800"):
+                    mail.close()
+                    mail.logout()
+                    return f"✅ **Código Encontrado!**\n\n🔑 Seu código é: `{cod}`\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
 
         mail.close()
         mail.logout()
@@ -500,7 +514,6 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
 
     loop = asyncio.get_running_loop()
     try:
-        # Garante timeout rígido de 12 segundos no Telegram para NUNCA congelar na mensagem de carregando
         resultado = await asyncio.wait_for(
             loop.run_in_executor(
                 None, 
