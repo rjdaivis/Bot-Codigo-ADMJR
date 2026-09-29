@@ -194,14 +194,9 @@ def extrair_url_pura_href(corpo_html: str, termo_busca: str = "http") -> str:
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
-    email_solicitado = dados_conta.get("email_destinatario", "").lower()
-    
     host = dados_conta.get("host_imap", "imap.gmail.com")
     porta = dados_conta.get("porta", 993)
     senha = dados_conta.get("senha_imap")
-    
-    email_solicitado_norm = normalizar_email_gmail(email_solicitado)
-    email_usuario_norm = normalizar_email_gmail(email_usuario)
 
     mail = None
     try:
@@ -240,7 +235,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             except Exception:
                 diferenca_segundos = 0
 
-            # JANELA DE SEGURANÇA MÁXIMA DE 25 MINUTOS
+            # JANELA DE 25 MINUTOS MAX
             if diferenca_segundos > 1500 or diferenca_segundos < -300:
                 continue
 
@@ -478,17 +473,17 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text(f"❌ Você não tem autorização para acessar o e-mail `{email_original}`.", parse_mode="Markdown")
             return
 
+    # Mapeamento do alias Outlook para a conta Gmail correta
     email_base = normalizar_email_gmail(email_original)
-    
-    # Redirecionamento de aliases do Outlook para a conta Gmail ativa do contas.json
-    if "marianna.admjr@outlook.com" in email_original:
+    if "marianna" in email_original or "outlook" in email_original:
         email_base = "polyadmjr.82and@gmail.com"
 
     contas = carregar_json("contas.json")
     
     conta_encontrada = None
     for chave_email, dados in contas.items():
-        if chave_email.strip().lower() == email_original or normalizar_email_gmail(chave_email) == email_base or normalizar_email_gmail(chave_email) == "polyadmjr82and@gmail.com":
+        chave_norm = normalizar_email_gmail(chave_email)
+        if chave_email.strip().lower() == email_original or chave_norm == email_base or "polyadmjr" in chave_norm:
             conta_encontrada = dados
             break
 
