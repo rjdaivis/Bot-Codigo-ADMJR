@@ -237,7 +237,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             except Exception:
                 diferenca_segundos = 0
 
-            # Janela máxima de 20 minutos
             if diferenca_segundos > 1200 or diferenca_segundos < -300:
                 continue
 
@@ -264,7 +263,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
             minutos = max(1, int(diferenca_segundos // 60)) if diferenca_segundos > 0 else 1
 
-            # --- REGRA 1: REDEFINIÇÃO DE SENHA (VIP) ---
+            # 1. REDEFINIÇÃO DE SENHA (VIP)
             if "redefinir" in assunto or "recuperar senha" in assunto or "reset-password" in corpo_html.lower():
                 if not pode_acessar_sensivel:
                     mail.close()
@@ -277,31 +276,12 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 if link_vip:
                     return f"✅ **Link de Redefinição Encontrado!**\n\n🔗 Link:\n{link_vip}\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
 
-            # --- REGRA 2: E-MAIL ESPECÍFICO DE CÓDIGO (CÓDIGO DE ENTRADA / VERIFICAÇÃO) ---
-            eh_email_de_codigo = (
-                "código de acesso" in assunto or 
-                "código de verificação" in assunto or 
-                "código" in assunto
-            )
-
-            if eh_email_de_codigo:
-                codigos_encontrados = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
-                codigo_valido = None
-                for c in codigos_encontrados:
-                    if not c.startswith("0800"):  # Ignora 0800 do suporte no rodapé
-                        codigo_valido = c
-                        break
-                
-                if codigo_valido:
-                    mail.close()
-                    mail.logout()
-                    return f"✅ **Código Encontrado!**\n\n🔑 Seu código é: `{codigo_valido}`\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
-
-            # --- REGRA 3: E-MAIL ESPECÍFICO DE LINK (RESIDÊNCIA / VERIFICAR ENDEREÇO) ---
+            # 2. E-MAILS DE LINK (VERIFICAÇÃO / RESIDÊNCIA / CONFIRMAÇÃO)
             eh_email_de_link = (
-                "residência" in assunto or 
-                "endereço de email" in assunto or 
-                "verificar" in assunto or 
+                "confirme seu endereço" in assunto or
+                "verifique seu endereço" in assunto or
+                "endereço de email" in assunto or
+                "residência" in assunto or
                 "atualizar" in assunto
             )
 
@@ -311,13 +291,32 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     mail.close()
                     mail.logout()
                     return (
-                        f"✅ **Link Encontrado!**\n\n"
+                        f"✅ **Link de Verificação / Residência Netflix Encontrado!**\n\n"
                         f"🔗 Clique no link abaixo para confirmar:\n{link_netflix}\n\n"
-                        f"⏱️️ *E-mail recebido há {minutos} minuto(s).*"
+                        f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
                     )
 
-            # --- REGRA 4: BUSCA GENÉRICA (SE O ASSUNTO FOR DESCONHECIDO OU FOR OUTRO PROVEDOR) ---
-            # Primeiro procura se tem código claro
+            # 3. E-MAILS DE CÓDIGO (CÓDIGO DE ENTRADA / ACESSO)
+            eh_email_de_codigo = (
+                "código de acesso" in assunto or
+                "código de verificação" in assunto or
+                "código" in assunto
+            )
+
+            if eh_email_de_codigo:
+                codigos_encontrados = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
+                codigo_valido = None
+                for c in codigos_encontrados:
+                    if not c.startswith("0800"):
+                        codigo_valido = c
+                        break
+                
+                if codigo_valido:
+                    mail.close()
+                    mail.logout()
+                    return f"✅ **Código Encontrado!**\n\n🔑 Seu código é: `{codigo_valido}`\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
+
+            # 4. BUSCA GENÉRICA (CASO O ASSUNTO NÃO SEJA ESPECÍFICO)
             codigos_gerais = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
             for cod in codigos_gerais:
                 if not cod.startswith("0800"):
@@ -325,7 +324,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     mail.logout()
                     return f"✅ **Código Encontrado!**\n\n🔑 Seu código é: `{cod}`\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
 
-            # Se não tinha código, tenta se tinha algum link útil
             link_generico = extrair_link_netflix_html(corpo_html)
             if link_generico:
                 mail.close()
