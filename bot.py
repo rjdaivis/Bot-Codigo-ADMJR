@@ -286,8 +286,22 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     mail.logout()
                     return "🚫 **Solicitação Não Permitida!**\n\nEste e-mail trata de redefinição de senha ou alteração de dados."
 
-            # 2. CÓDIGO DE ENTRADA / ACESSO -> APENAS CÓDIGO
-            if "código de acesso" in assunto_lower or "código de verificação" in assunto_lower:
+            # 2. VERIFICAÇÃO DE ENDEREÇO / RESIDÊNCIA -> RETORNA EXCLUSIVAMENTE O LINK
+            eh_email_link = any(p in assunto_lower for p in ["confirme seu endereço", "verifique seu endereço", "residência", "endereço de email", "atualizar"])
+            if eh_email_link:
+                link_netflix = extrair_link_netflix_html(corpo_html)
+                if link_netflix:
+                    mail.close()
+                    mail.logout()
+                    return (
+                        f"✅ **Link de Verificação / Residência Netflix Encontrado!**\n\n"
+                        f"🔗 Clique no link abaixo para confirmar:\n{link_netflix}\n\n"
+                        f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
+                    )
+
+            # 3. CÓDIGO DE ENTRADA / ACESSO -> RETORNA EXCLUSIVAMENTE O CÓDIGO
+            eh_email_codigo = any(p in assunto_lower for p in ["código de acesso", "código de verificação"])
+            if eh_email_codigo:
                 codigos = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
                 for cod in codigos:
                     if not cod.startswith("0800"):
@@ -295,24 +309,12 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         mail.logout()
                         return f"✅ **Código Encontrado!**\n\n🔑 Seu código é: `{cod}`\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
 
-            # 3. VERIFICAÇÃO / RESIDÊNCIA -> APENAS LINK
-            if "confirme" in assunto_lower or "endereço" in assunto_lower or "residência" in assunto_lower or "atualizar" in assunto_lower:
-                link_netflix = extrair_link_netflix_html(corpo_html)
-                if link_netflix:
-                    mail.close()
-                    mail.logout()
-                    return (
-                        f"✅ **Link Encontrado!**\n\n"
-                        f"🔗 Clique no link abaixo para confirmar:\n{link_netflix}\n\n"
-                        f"⏱️ *E-mail recebido há {minutos} minuto(s).*"
-                    )
-
-            # 4. CASO GENÉRICO -> PEGA O QUE TIVER
+            # 4. CASO GENÉRICO DE FALLBACK
             codigos_encontrados = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
             codigo_valido = next((c for c in codigos_encontrados if not c.startswith("0800")), None)
             link_encontrado = extrair_link_netflix_html(corpo_html) or extrair_url_pura_href(corpo_html, "http")
 
-            if codigo_valido:
+            if codigo_valido and "código" in assunto_lower:
                 mail.close()
                 mail.logout()
                 return f"✅ **Código Encontrado!**\n\n🔑 Seu código é: `{codigo_valido}`\n\n⏱️ *E-mail recebido há {minutos} minuto(s).*"
