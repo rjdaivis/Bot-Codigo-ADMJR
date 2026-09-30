@@ -180,18 +180,21 @@ def extrair_link_netflix_html(corpo_html: str) -> str:
     
     matches = re.findall(r'href=["\'](https?://[^"\']+)["\']', corpo_html, re.IGNORECASE)
     
-    # 1. Busca prioritária por links de confirmação/residência
+    # Lista de palavras que NUNCA devem estar no link principal
+    palavras_bloqueadas = ["password", "travel", "help", "unsubscribe", "login", "manageaccountaccess"]
+
+    # 1. Busca prioritária pelo botão principal de confirmação/residência
     for link in matches:
         link_lower = link.lower()
         if "netflix.com" in link_lower and any(p in link_lower for p in ["accountaccess", "update-primary-location", "nftoken", "verifyemail", "confirm"]):
-            if not any(x in link_lower for x in ["password", "travel", "help", "unsubscribe", "login"]):
+            if not any(x in link_lower for x in palavras_bloqueadas):
                 link_limpo = link.replace("&#x3D;", "=").replace("&amp;", "&").replace("\r", "").replace("\n", "")
                 return link_limpo.strip()
 
-    # 2. Busca genérica filtrando qualquer link de senha ou conta
+    # 2. Busca secundária de backup
     for link in matches:
         link_lower = link.lower()
-        if "netflix.com" in link_lower and not any(x in link_lower for x in ["password", "unsubscribe", "help", "privacy", "terms", "twitter", "facebook", "login"]):
+        if "netflix.com" in link_lower and not any(x in link_lower for x in palavras_bloqueadas + ["privacy", "terms", "twitter", "facebook"]):
             link_limpo = link.replace("&#x3D;", "=").replace("&amp;", "&").replace("\r", "").replace("\n", "")
             return link_limpo.strip()
 
@@ -202,7 +205,7 @@ def extrair_url_pura_href(corpo_html: str, termo_busca: str = "http") -> str:
         return ""
     matches = re.findall(r'href=["\'](https?://[^"\']+)["\']', corpo_html, re.IGNORECASE)
     for link in matches:
-        if termo_busca in link.lower() and not any(x in link.lower() for x in ["password", "unsubscribe", "help", "privacy", "terms"]):
+        if termo_busca in link.lower() and not any(x in link.lower() for x in ["password", "unsubscribe", "help", "privacy", "terms", "manageaccountaccess"]):
             link_limpo = link.replace("&#x3D;", "=").replace("&amp;", "&").replace("\r", "").replace("\n", "")
             return link_limpo.strip()
     return ""
@@ -291,7 +294,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     return "🚫 <b>Solicitação Não Permitida!</b>\n\nEste e-mail trata de redefinição de senha ou alteração de dados."
 
             # 2. VERIFICAÇÃO DE ENDEREÇO / RESIDÊNCIA -> RETORNA O LINK FORMATADO EM HTML
-            eh_email_link = any(p in assunto_lower for p in ["confirme seu endereço", "verifique seu endereço", "residência", "endereço de email", "atualizar"])
+            eh_email_link = any(p in assunto_lower for p in ["confirme seu endereço", "verifique seu endereço", "residência", "endereço de email", "atualizar", "fora da sua"])
             if eh_email_link:
                 link_netflix = extrair_link_netflix_html(corpo_html)
                 if link_netflix:
