@@ -117,7 +117,6 @@ def carregar_json(caminho: str) -> dict:
                 if "emails_permitidos" not in dados[id_fixo]:
                     dados[id_fixo]["emails_permitidos"] = {}
                 for em, val in info_fixa.get("emails_permitidos", {}).items():
-                    # Preserva a data já gravada no arquivo clientes.json se ela existir
                     if em not in dados[id_fixo]["emails_permitidos"]:
                         dados[id_fixo]["emails_permitidos"][em] = val
                 if info_fixa.get("permitir_sensivel"):
@@ -296,7 +295,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
         if status != "OK" or not messages[0]:
             mail.close()
             mail.logout()
-            return "⚠️️ Nenhum e-mail recente foi localizado nesta caixa."
+            return "⚠️ Nenhum e-mail recente foi localizado nesta caixa."
 
         id_list = messages[0].split()
         ultimos_ids = id_list[-5:]
@@ -421,7 +420,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         f"✅ <b>Link de Redefinição/Alteração de Senha Encontrado!</b>\n\n"
                         f"👉 <a href=\"{link_vip}\">Clique aqui para redefinir sua senha</a>\n\n"
                         f"🔗 <b>URL Completa:</b>\n<code>{link_vip}</code>\n\n"
-                        f"⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
+                        f"⏱️️ <i>E-mail recebido há {minutos} minuto(s).</i>"
                     )
 
             # 5. CASO GENÉRICO DE FALLBACK
