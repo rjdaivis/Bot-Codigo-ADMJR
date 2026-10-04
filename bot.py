@@ -265,6 +265,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
             assunto_original = decodificar_assunto(str(msg.get("Subject", "")))
             assunto_lower = assunto_original.lower()
+            remetente_lower = str(msg.get("From", "")).lower()
 
             corpo_bruto = b""
             if msg.is_multipart():
@@ -286,14 +287,26 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
             minutos = max(1, int(diferenca_segundos // 60)) if diferenca_segundos > 0 else 1
 
-            # 1. SEGURANÇA VIP (REDEFINIÇÃO DE SENHA)
-            if "redefinir" in assunto_lower or "recuperar senha" in assunto_lower or "reset-password" in corpo_html.lower():
+            # 1. SEGURANÇA VIP (REDEFINIÇÃO / ALTERAÇÃO DE SENHA - NETFLIX, HBO MAX, ETC.)
+            eh_redefinicao = any(p in assunto_lower for p in ["redefinir", "recuperar senha", "alteração de senha", "alterar senha", "reset password"]) or "reset-password" in corpo_html.lower() or "hbomax" in remetente_lower or "max.com" in remetente_lower
+            if eh_redefinicao:
                 if not pode_acessar_sensivel:
                     mail.close()
                     mail.logout()
                     return "🚫 <b>Solicitação Não Permitida!</b>\n\nEste e-mail trata de redefinição de senha ou alteração de dados."
+                
+                link_vip = extrair_url_pura_href(corpo_html, "http")
+                if link_vip:
+                    mail.close()
+                    mail.logout()
+                    return (
+                        f"✅ <b>Link de Redefinição/Alteração de Senha Encontrado!</b>\n\n"
+                        f"👉 <a href=\"{link_vip}\">Clique aqui para redefinir sua senha</a>\n\n"
+                        f"🔗 <b>URL Completa:</b>\n<code>{link_vip}</code>\n\n"
+                        f"⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
+                    )
 
-            # 2. VERIFICAÇÃO DE ENDEREÇO / RESIDÊNCIA -> RETORNA O LINK FORMATADO EM HTML
+            # 2. VERIFICAÇÃO DE ENDEREÇO / RESIDÊNCIA NETFLIX -> RETORNA O LINK FORMATADO EM HTML
             eh_email_link = any(p in assunto_lower for p in ["confirme seu endereço", "verifique seu endereço", "residência", "endereço de email", "atualizar", "fora da sua"])
             if eh_email_link:
                 link_netflix = extrair_link_netflix_html(corpo_html)
