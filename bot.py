@@ -179,7 +179,6 @@ def extrair_link_netflix_html(corpo_html: str) -> str:
         return ""
     
     matches = re.findall(r'href=["\'](https?://[^"\']+)["\']', corpo_html, re.IGNORECASE)
-    
     palavras_bloqueadas = ["password", "travel", "help", "unsubscribe", "login", "manageaccountaccess"]
 
     for link in matches:
@@ -227,12 +226,31 @@ def extrair_link_hbomax_html(corpo_html: str) -> str:
 
     return ""
 
+def extrair_link_redefinicao_html(corpo_html: str) -> str:
+    if not corpo_html:
+        return ""
+    matches = re.findall(r'href=["\'](https?://[^"\']+)["\']', corpo_html, re.IGNORECASE)
+    for link in matches:
+        link_lower = link.lower()
+        if any(p in link_lower for p in ["recuperar", "redefinir", "reset", "password", "alterar", "senha", "token", "confirm"]):
+            if not any(x in link_lower for x in ["unsubscribe", "help", "privacy", "terms", "facebook", "twitter"]):
+                link_limpo = link.replace("&#x3D;", "=").replace("&amp;", "&").replace("\r", "").replace("\n", "")
+                return link_limpo.strip()
+
+    for link in matches:
+        link_lower = link.lower()
+        if not any(x in link_lower for x in ["unsubscribe", "help", "privacy", "terms", "facebook", "twitter"]):
+            link_limpo = link.replace("&#x3D;", "=").replace("&amp;", "&").replace("\r", "").replace("\n", "")
+            return link_limpo.strip()
+            
+    return ""
+
 def extrair_url_pura_href(corpo_html: str, termo_busca: str = "http") -> str:
     if not corpo_html:
         return ""
     matches = re.findall(r'href=["\'](https?://[^"\']+)["\']', corpo_html, re.IGNORECASE)
     for link in matches:
-        if termo_busca in link.lower() and not any(x in link.lower() for x in ["password", "unsubscribe", "help", "privacy", "terms", "manageaccountaccess"]):
+        if termo_busca in link.lower() and not any(x in link.lower() for x in ["unsubscribe", "help", "privacy", "terms", "manageaccountaccess"]):
             link_limpo = link.replace("&#x3D;", "=").replace("&amp;", "&").replace("\r", "").replace("\n", "")
             return link_limpo.strip()
     return ""
@@ -314,7 +332,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
             minutos = max(1, int(diferenca_segundos // 60)) if diferenca_segundos > 0 else 1
 
-            # 1. CÓDIGO DE ENTRADA / ACESSO / CÓDIGO ÚNICO (TEMPORÁRIO / VERIFICAÇÃO) -> PRIORIDADE MÁXIMA
+            # 1. CÓDIGO DE ENTRADA / ACESSO / CÓDIGO ÚNICO (PRIORIDADE MÁXIMA SE O ASSUNTO CONTIVER PALAVRA CÓDIGO)
             eh_email_codigo = any(p in assunto_lower for p in ["código", "codigo", "temporário", "temporario"])
             if eh_email_codigo:
                 codigos = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
@@ -324,8 +342,12 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         mail.logout()
                         return f"✅ <b>Código Encontrado!</b>\n\n🔑 Seu código é: <code>{cod}</code>\n\n⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
 
-            # 2. SEGURANÇA VIP (REDEFINIÇÃO DE SENHA - EXIGE ASSUNTO/CORPO EXPLÍCITO)
-            eh_redefinicao = any(p in assunto_lower for p in ["redefinir", "recuperar senha", "alteração de senha", "alterar senha", "reset password", "restabelecer senha"]) or "reset-password" in corpo_html.lower()
+            # 2. SEGURANÇA VIP (REDEFINIÇÃO / RECUPERAÇÃO DE SENHA)
+            eh_redefinicao = (
+                any(p in assunto_lower for p in ["redefinir", "recuperar", "alteração de senha", "alterar senha", "reset password", "restabelecer senha"])
+                or ("recuperar" in assunto_lower and "senha" in assunto_lower)
+                or "reset-password" in corpo_html.lower()
+            )
             if eh_redefinicao:
                 if not pode_acessar_sensivel:
                     mail.close()
@@ -335,7 +357,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 if "hbomax" in remetente_lower or "max.com" in remetente_lower or "hbo" in assunto_lower:
                     link_vip = extrair_link_hbomax_html(corpo_html)
                 else:
-                    link_vip = extrair_url_pura_href(corpo_html, "http")
+                    link_vip = extrair_link_redefinicao_html(corpo_html)
 
                 if link_vip:
                     mail.close()
@@ -366,7 +388,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             codigo_valido = next((c for c in codigos_encontrados if not c.startswith("0800") and c != "2026"), None)
             link_encontrado = extrair_link_netflix_html(corpo_html) or extrair_link_hbomax_html(corpo_html) or extrair_url_pura_href(corpo_html, "http")
 
-            if codigo_valido:
+            if codigo_valido and "código" in assunto_lower:
                 mail.close()
                 mail.logout()
                 return f"✅ <b>Código Encontrado!</b>\n\n🔑 Seu código é: <code>{codigo_valido}</code>\n\n⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
