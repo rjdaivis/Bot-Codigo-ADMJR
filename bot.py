@@ -200,9 +200,18 @@ def extrair_link_netflix_html(corpo_html: str) -> str:
 def extrair_link_hbomax_html(corpo_html: str) -> str:
     if not corpo_html:
         return ""
-    matches = re.findall(r'href=["\'](https?://[^"\']+)["\']', corpo_html, re.IGNORECASE)
     
-    # Busca prioritária por links com parâmetros de token ou redefinição
+    # 1. Busca prioritária pelo texto exato do botão no e-mail
+    palavras_hbomax = ["restabelecer", "redefinir", "reset", "nova senha", "alterar senha", "criar senha"]
+    anchors = re.findall(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', corpo_html, re.IGNORECASE | re.DOTALL)
+    for href, inner_html in anchors:
+        texto_botao = re.sub(r'<[^>]+>', ' ', inner_html).strip().lower()
+        if any(p in texto_botao for p in palavras_hbomax):
+            href_limpo = href.replace("&#x3D;", "=").replace("&amp;", "&").replace("\r", "").replace("\n", "")
+            return href_limpo.strip()
+
+    # 2. Busca secundária por hiperligações contendo parâmetros de token/redefinição
+    matches = re.findall(r'href=["\'](https?://[^"\']+)["\']', corpo_html, re.IGNORECASE)
     for link in matches:
         link_lower = link.lower()
         if ("hbomax.com" in link_lower or "max.com" in link_lower) and any(p in link_lower for p in ["reset", "token", "password", "auth", "credential"]):
@@ -210,10 +219,12 @@ def extrair_link_hbomax_html(corpo_html: str) -> str:
                 link_limpo = link.replace("&#x3D;", "=").replace("&amp;", "&").replace("\r", "").replace("\n", "")
                 return link_limpo.strip()
 
+    # 3. Busca de segurança descartando URLs de páginas iniciais simples
     for link in matches:
         link_lower = link.lower()
         if ("hbomax.com" in link_lower or "max.com" in link_lower) and not any(x in link_lower for x in ["unsubscribe", "help", "privacy", "terms", "twitter", "facebook"]):
-            if link_lower.strip("/") not in ["https://www.hbomax.com", "https://hbomax.com", "https://www.max.com", "https://max.com"]:
+            link_sem_query = link_lower.split("?")[0].strip("/")
+            if link_sem_query not in ["https://www.hbomax.com", "https://hbomax.com", "https://www.max.com", "https://max.com"]:
                 link_limpo = link.replace("&#x3D;", "=").replace("&amp;", "&").replace("\r", "").replace("\n", "")
                 return link_limpo.strip()
 
@@ -314,7 +325,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     mail.logout()
                     return "🚫 <b>Solicitação Não Permitida!</b>\n\nEste e-mail trata de redefinição de senha ou alteração de dados."
                 
-                # Se for HBO Max / Max usa extrator específico, se não tenta o genérico
+                # Se for HBO Max / Max utiliza o extrator direcionado ao botão
                 if "hbomax" in remetente_lower or "max.com" in remetente_lower or "hbo" in assunto_lower:
                     link_vip = extrair_link_hbomax_html(corpo_html)
                 else:
@@ -327,7 +338,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         f"✅ <b>Link de Redefinição/Alteração de Senha Encontrado!</b>\n\n"
                         f"👉 <a href=\"{link_vip}\">Clique aqui para redefinir sua senha</a>\n\n"
                         f"🔗 <b>URL Completa:</b>\n<code>{link_vip}</code>\n\n"
-                        f"⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
+                        f"⏱️️ <i>E-mail recebido há {minutos} minuto(s).</i>"
                     )
 
             # 2. VERIFICAÇÃO DE ENDEREÇO / RESIDÊNCIA NETFLIX -> RETORNA O LINK FORMATADO EM HTML
