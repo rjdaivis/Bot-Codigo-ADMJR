@@ -201,7 +201,6 @@ def extrair_link_hbomax_html(corpo_html: str) -> str:
     if not corpo_html:
         return ""
     
-    # 1. Busca prioritária pelo texto exato do botão no e-mail
     palavras_hbomax = ["restabelecer", "redefinir", "reset", "nova senha", "alterar senha", "criar senha"]
     anchors = re.findall(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', corpo_html, re.IGNORECASE | re.DOTALL)
     for href, inner_html in anchors:
@@ -210,7 +209,6 @@ def extrair_link_hbomax_html(corpo_html: str) -> str:
             href_limpo = href.replace("&#x3D;", "=").replace("&amp;", "&").replace("\r", "").replace("\n", "")
             return href_limpo.strip()
 
-    # 2. Busca secundária por hiperligações contendo parâmetros de token/redefinição
     matches = re.findall(r'href=["\'](https?://[^"\']+)["\']', corpo_html, re.IGNORECASE)
     for link in matches:
         link_lower = link.lower()
@@ -219,7 +217,6 @@ def extrair_link_hbomax_html(corpo_html: str) -> str:
                 link_limpo = link.replace("&#x3D;", "=").replace("&amp;", "&").replace("\r", "").replace("\n", "")
                 return link_limpo.strip()
 
-    # 3. Busca de segurança descartando URLs de páginas iniciais simples
     for link in matches:
         link_lower = link.lower()
         if ("hbomax.com" in link_lower or "max.com" in link_lower) and not any(x in link_lower for x in ["unsubscribe", "help", "privacy", "terms", "twitter", "facebook"]):
@@ -317,15 +314,24 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
             minutos = max(1, int(diferenca_segundos // 60)) if diferenca_segundos > 0 else 1
 
-            # 1. SEGURANÇA VIP (REDEFINIÇÃO / ALTERAÇÃO DE SENHA - NETFLIX, HBO MAX, ETC.)
-            eh_redefinicao = any(p in assunto_lower for p in ["redefinir", "recuperar senha", "alteração de senha", "alterar senha", "reset password"]) or "reset-password" in corpo_html.lower() or "hbomax" in remetente_lower or "max.com" in remetente_lower
+            # 1. CÓDIGO DE ENTRADA / ACESSO / CÓDIGO ÚNICO (TEMPORÁRIO / VERIFICAÇÃO) -> PRIORIDADE MÁXIMA
+            eh_email_codigo = any(p in assunto_lower for p in ["código", "codigo", "temporário", "temporario"])
+            if eh_email_codigo:
+                codigos = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
+                for cod in codigos:
+                    if not cod.startswith("0800") and cod != "2026":
+                        mail.close()
+                        mail.logout()
+                        return f"✅ <b>Código Encontrado!</b>\n\n🔑 Seu código é: <code>{cod}</code>\n\n⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
+
+            # 2. SEGURANÇA VIP (REDEFINIÇÃO DE SENHA - EXIGE ASSUNTO/CORPO EXPLÍCITO)
+            eh_redefinicao = any(p in assunto_lower for p in ["redefinir", "recuperar senha", "alteração de senha", "alterar senha", "reset password", "restabelecer senha"]) or "reset-password" in corpo_html.lower()
             if eh_redefinicao:
                 if not pode_acessar_sensivel:
                     mail.close()
                     mail.logout()
                     return "🚫 <b>Solicitação Não Permitida!</b>\n\nEste e-mail trata de redefinição de senha ou alteração de dados."
                 
-                # Se for HBO Max / Max utiliza o extrator direcionado ao botão
                 if "hbomax" in remetente_lower or "max.com" in remetente_lower or "hbo" in assunto_lower:
                     link_vip = extrair_link_hbomax_html(corpo_html)
                 else:
@@ -338,10 +344,10 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         f"✅ <b>Link de Redefinição/Alteração de Senha Encontrado!</b>\n\n"
                         f"👉 <a href=\"{link_vip}\">Clique aqui para redefinir sua senha</a>\n\n"
                         f"🔗 <b>URL Completa:</b>\n<code>{link_vip}</code>\n\n"
-                        f"⏱️️ <i>E-mail recebido há {minutos} minuto(s).</i>"
+                        f"⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
                     )
 
-            # 2. VERIFICAÇÃO DE ENDEREÇO / RESIDÊNCIA NETFLIX -> RETORNA O LINK FORMATADO EM HTML
+            # 3. VERIFICAÇÃO DE ENDEREÇO / RESIDÊNCIA NETFLIX -> RETORNA O LINK FORMATADO EM HTML
             eh_email_link = any(p in assunto_lower for p in ["confirme seu endereço", "verifique seu endereço", "residência", "endereço de email", "atualizar", "fora da sua"])
             if eh_email_link:
                 link_netflix = extrair_link_netflix_html(corpo_html)
@@ -355,22 +361,12 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         f"⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
                     )
 
-            # 3. CÓDIGO DE ENTRADA / ACESSO -> RETORNA O CÓDIGO
-            eh_email_codigo = any(p in assunto_lower for p in ["código de acesso", "código de verificação"])
-            if eh_email_codigo:
-                codigos = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
-                for cod in codigos:
-                    if not cod.startswith("0800"):
-                        mail.close()
-                        mail.logout()
-                        return f"✅ <b>Código Encontrado!</b>\n\n🔑 Seu código é: <code>{cod}</code>\n\n⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
-
             # 4. CASO GENÉRICO DE FALLBACK
             codigos_encontrados = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
-            codigo_valido = next((c for c in codigos_encontrados if not c.startswith("0800")), None)
+            codigo_valido = next((c for c in codigos_encontrados if not c.startswith("0800") and c != "2026"), None)
             link_encontrado = extrair_link_netflix_html(corpo_html) or extrair_link_hbomax_html(corpo_html) or extrair_url_pura_href(corpo_html, "http")
 
-            if codigo_valido and "código" in assunto_lower:
+            if codigo_valido:
                 mail.close()
                 mail.logout()
                 return f"✅ <b>Código Encontrado!</b>\n\n🔑 Seu código é: <code>{codigo_valido}</code>\n\n⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
