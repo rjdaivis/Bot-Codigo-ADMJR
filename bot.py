@@ -180,10 +180,8 @@ def extrair_link_netflix_html(corpo_html: str) -> str:
     
     matches = re.findall(r'href=["\'](https?://[^"\']+)["\']', corpo_html, re.IGNORECASE)
     
-    # Lista de palavras que NUNCA devem estar no link principal
     palavras_bloqueadas = ["password", "travel", "help", "unsubscribe", "login", "manageaccountaccess"]
 
-    # 1. Busca prioritária pelo botão principal de confirmação/residência
     for link in matches:
         link_lower = link.lower()
         if "netflix.com" in link_lower and any(p in link_lower for p in ["accountaccess", "update-primary-location", "nftoken", "verifyemail", "confirm"]):
@@ -191,12 +189,33 @@ def extrair_link_netflix_html(corpo_html: str) -> str:
                 link_limpo = link.replace("&#x3D;", "=").replace("&amp;", "&").replace("\r", "").replace("\n", "")
                 return link_limpo.strip()
 
-    # 2. Busca secundária de backup
     for link in matches:
         link_lower = link.lower()
         if "netflix.com" in link_lower and not any(x in link_lower for x in palavras_bloqueadas + ["privacy", "terms", "twitter", "facebook"]):
             link_limpo = link.replace("&#x3D;", "=").replace("&amp;", "&").replace("\r", "").replace("\n", "")
             return link_limpo.strip()
+
+    return ""
+
+def extrair_link_hbomax_html(corpo_html: str) -> str:
+    if not corpo_html:
+        return ""
+    matches = re.findall(r'href=["\'](https?://[^"\']+)["\']', corpo_html, re.IGNORECASE)
+    
+    # Busca prioritária por links com parâmetros de token ou redefinição
+    for link in matches:
+        link_lower = link.lower()
+        if ("hbomax.com" in link_lower or "max.com" in link_lower) and any(p in link_lower for p in ["reset", "token", "password", "auth", "credential"]):
+            if not any(x in link_lower for x in ["unsubscribe", "help", "privacy", "terms"]):
+                link_limpo = link.replace("&#x3D;", "=").replace("&amp;", "&").replace("\r", "").replace("\n", "")
+                return link_limpo.strip()
+
+    for link in matches:
+        link_lower = link.lower()
+        if ("hbomax.com" in link_lower or "max.com" in link_lower) and not any(x in link_lower for x in ["unsubscribe", "help", "privacy", "terms", "twitter", "facebook"]):
+            if link_lower.strip("/") not in ["https://www.hbomax.com", "https://hbomax.com", "https://www.max.com", "https://max.com"]:
+                link_limpo = link.replace("&#x3D;", "=").replace("&amp;", "&").replace("\r", "").replace("\n", "")
+                return link_limpo.strip()
 
     return ""
 
@@ -295,7 +314,12 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     mail.logout()
                     return "🚫 <b>Solicitação Não Permitida!</b>\n\nEste e-mail trata de redefinição de senha ou alteração de dados."
                 
-                link_vip = extrair_url_pura_href(corpo_html, "http")
+                # Se for HBO Max / Max usa extrator específico, se não tenta o genérico
+                if "hbomax" in remetente_lower or "max.com" in remetente_lower or "hbo" in assunto_lower:
+                    link_vip = extrair_link_hbomax_html(corpo_html)
+                else:
+                    link_vip = extrair_url_pura_href(corpo_html, "http")
+
                 if link_vip:
                     mail.close()
                     mail.logout()
@@ -333,7 +357,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             # 4. CASO GENÉRICO DE FALLBACK
             codigos_encontrados = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
             codigo_valido = next((c for c in codigos_encontrados if not c.startswith("0800")), None)
-            link_encontrado = extrair_link_netflix_html(corpo_html) or extrair_url_pura_href(corpo_html, "http")
+            link_encontrado = extrair_link_netflix_html(corpo_html) or extrair_link_hbomax_html(corpo_html) or extrair_url_pura_href(corpo_html, "http")
 
             if codigo_valido and "código" in assunto_lower:
                 mail.close()
