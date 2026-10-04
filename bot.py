@@ -113,14 +113,6 @@ def carregar_json(caminho: str) -> dict:
                     "emails_permitidos": dict(info_fixa.get("emails_permitidos", {})),
                     "permitir_sensivel": info_fixa.get("permitir_sensivel", False)
                 }
-            else:
-                if "emails_permitidos" not in dados[id_fixo]:
-                    dados[id_fixo]["emails_permitidos"] = {}
-                for em, val in info_fixa.get("emails_permitidos", {}).items():
-                    if em not in dados[id_fixo]["emails_permitidos"]:
-                        dados[id_fixo]["emails_permitidos"][em] = val
-                if info_fixa.get("permitir_sensivel"):
-                    dados[id_fixo]["permitir_sensivel"] = True
     return dados
 
 def salvar_json(caminho: str, dados: dict):
@@ -420,7 +412,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         f"✅ <b>Link de Redefinição/Alteração de Senha Encontrado!</b>\n\n"
                         f"👉 <a href=\"{link_vip}\">Clique aqui para redefinir sua senha</a>\n\n"
                         f"🔗 <b>URL Completa:</b>\n<code>{link_vip}</code>\n\n"
-                        f"⏱️️ <i>E-mail recebido há {minutos} minuto(s).</i>"
+                        f"⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
                     )
 
             # 5. CASO GENÉRICO DE FALLBACK
@@ -528,6 +520,27 @@ async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "⚠️ <b>Uso correto:</b> <code>/autorizar ID_CLIENTE EMAIL DIAS [vip]</code>",
             parse_mode="HTML"
         )
+
+async def limpar_nao_vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if str(update.effective_user.id).strip() != str(ADMIN_ID).strip():
+        return
+
+    clientes = carregar_json("clientes.json")
+    removidos = 0
+
+    for user_id, dados in list(clientes.items()):
+        if not dados.get("permitir_sensivel", False) and user_id != str(ADMIN_ID).strip():
+            dados["emails_permitidos"] = {}
+            removidos += 1
+
+    salvar_json("clientes.json", clientes)
+
+    await update.message.reply_text(
+        f"🧹 <b>Limpeza Concluída!</b>\n\n"
+        f"Todos os e-mails autorizados de <b>{removidos}</b> cliente(s) não-VIP foram limpos com sucesso.\n\n"
+        f"Apenas os acessos dos usuários VIPs e Administradores foram mantidos.",
+        parse_mode="HTML"
+    )
 
 async def listar_clientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_user.id).strip() != str(ADMIN_ID).strip():
@@ -646,6 +659,8 @@ def main():
 
             app.add_handler(CommandHandler("start", start))
             app.add_handler(CommandHandler("autorizar", autorizar_cliente))
+            app.add_handler(CommandHandler("limpar", limpar_nao_vip))
+            app.add_handler(CommandHandler("limpar_nao_vip", limpar_nao_vip))
             app.add_handler(CommandHandler("listar", listar_clientes))
             app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receber_mensagem_email))
 
