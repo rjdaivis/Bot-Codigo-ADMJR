@@ -341,8 +341,24 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             minutos = max(1, int(diferenca_segundos // 60)) if diferenca_segundos > 0 else 1
 
             eh_netflix = ("netflix" in remetente_lower or "netflix" in assunto_lower or "netflix" in corpo_html.lower())
+            eh_disney = ("disney" in remetente_lower or "disney" in assunto_lower or "disneyplus" in corpo_html.lower())
 
-            # 1. NETFLIX: VIAJANDO / CÓDIGO TEMPORÁRIO
+            # -----------------------------------------------------------------
+            # 1. DISNEY+: ENTREGA SEMPRE O CÓDIGO (DISNEY USA CÓDIGOS DE 6 DÍGITOS PARA TUDO)
+            # -----------------------------------------------------------------
+            if eh_disney:
+                codigos = re.findall(r'\b\d{6}\b', corpo_texto_puro)
+                if not codigos:
+                    codigos = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
+                codigo_valido = next((c for c in codigos if not c.startswith("0800") and c != "2026"), None)
+                if codigo_valido:
+                    mail.close()
+                    mail.logout()
+                    return f"✅ <b>Código Disney+ Encontrado!</b>\n\n🔑 Seu código é: <code>{codigo_valido}</code>\n\n⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
+
+            # -----------------------------------------------------------------
+            # 2. NETFLIX: VIAJANDO / CÓDIGO TEMPORÁRIO
+            # -----------------------------------------------------------------
             if eh_netflix and any(p in assunto_lower or p in corpo_texto_puro.lower() for p in ["fora da sua residência", "fora da sua residencia", "estou viajando", "código de viagem", "codigo de viagem", "acesso temporário", "acesso temporario"]):
                 codigos = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
                 codigo_valido = next((c for c in codigos if not c.startswith("0800") and c != "2026"), None)
@@ -363,7 +379,9 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     mail.logout()
                     return f"✅ <b>Código de Viagem Netflix Encontrado!</b>\n\n🔑 Seu código é: <code>{codigo_valido}</code>\n\n⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
 
-            # 2. NETFLIX: ATUALIZAÇÃO / CONFIRMAÇÃO DE RESIDÊNCIA
+            # -----------------------------------------------------------------
+            # 3. NETFLIX: ATUALIZAÇÃO / CONFIRMAÇÃO DE RESIDÊNCIA
+            # -----------------------------------------------------------------
             if eh_netflix and any(p in assunto_lower or p in corpo_texto_puro.lower() for p in ["confirme seu endereço", "verifique seu endereço", "atualizar sua residência", "atualizar residencia", "residência netflix", "residencia netflix"]):
                 link_residencia = extrair_link_netflix_html(corpo_html, tipo="residencia")
                 if link_residencia:
@@ -376,7 +394,9 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         f"⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
                     )
 
-            # 3. CÓDIGO NUMÉRICO DE ENTRADA / ACESSO
+            # -----------------------------------------------------------------
+            # 4. CÓDIGO NUMÉRICO DE ENTRADA / ACESSO GERAL
+            # -----------------------------------------------------------------
             eh_email_codigo = any(p in assunto_lower for p in ["código", "codigo", "temporário", "temporario", "autorização", "autorizacao", "verificação", "verificacao"])
             if eh_email_codigo:
                 codigos = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
@@ -386,7 +406,9 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     mail.logout()
                     return f"✅ <b>Código Encontrado!</b>\n\n🔑 Seu código é: <code>{codigo_valido}</code>\n\n⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
 
-            # 4. SEGURANÇA VIP (REDEFINIÇÃO DE SENHA)
+            # -----------------------------------------------------------------
+            # 5. SEGURANÇA VIP (REDEFINIÇÃO DE SENHA)
+            # -----------------------------------------------------------------
             eh_redefinicao = (
                 any(p in assunto_lower for p in ["redefinir", "recuperar", "alteração de senha", "alterar senha", "reset password", "restabelecer senha"])
                 or ("recuperar" in assunto_lower and "senha" in assunto_lower)
@@ -415,20 +437,23 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         f"⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
                     )
 
-            # 5. CASO GENÉRICO DE FALLBACK
+            # -----------------------------------------------------------------
+            # 6. CASO GENÉRICO DE FALLBACK (PRIORIZA CÓDIGO SE EXISTIR NO CORPO)
+            # -----------------------------------------------------------------
             codigos_encontrados = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
             codigo_valido = next((c for c in codigos_encontrados if not c.startswith("0800") and c != "2026"), None)
             
+            if codigo_valido:
+                mail.close()
+                mail.logout()
+                return f"✅ <b>Código Encontrado!</b>\n\n🔑 Seu código é: <code>{codigo_valido}</code>\n\n⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
+
             if eh_netflix:
                 link_encontrado = extrair_link_netflix_html(corpo_html, tipo="geral")
             else:
                 link_encontrado = extrair_link_hbomax_html(corpo_html) or extrair_url_pura_href(corpo_html, "http")
 
-            if codigo_valido and "código" in assunto_lower:
-                mail.close()
-                mail.logout()
-                return f"✅ <b>Código Encontrado!</b>\n\n🔑 Seu código é: <code>{codigo_valido}</code>\n\n⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
-            elif link_encontrado:
+            if link_encontrado:
                 mail.close()
                 mail.logout()
                 return (
