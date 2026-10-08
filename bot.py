@@ -31,59 +31,6 @@ CLIENTES_FIXOS_PADRAO = {
     "6035184245": {
         "emails_permitidos": {"*": "2027-01-16"},
         "permitir_sensivel": True
-    },
-    "7955838907": {
-        "emails_permitidos": {
-            "pastos.gl.au.b.er@gmail.com": "2026-10-04",
-            "mariana.l.a.s.t.os8.1@gmail.com": "2026-10-21"
-        },
-        "permitir_sensivel": False
-    },
-    "1399615731": {
-        "emails_permitidos": {
-            "mau.a.dan.ie.l.a@gmail.com": "2026-10-21"
-        },
-        "permitir_sensivel": False
-    },
-    "5804754899": {
-        "emails_permitidos": {
-            "ale62828adm.jr7maltes@gmail.com": "2026-12-31",
-            "marianal.as.tos8.1@gmail.com": "2026-12-31",
-            "marianna.admjr@outlook.com": "2026-12-31"
-        },
-        "permitir_sensivel": False
-    },
-    "7219528497": {
-        "emails_permitidos": {
-            "costalinhare.s325@gmail.com": "2026-12-31",
-            "costalinhares325@gmail.com": "2026-12-31",
-            "elimira.n.dael.lo@gmail.com": "2026-12-31"
-        },
-        "permitir_sensivel": False
-    },
-    "2082696204": {
-        "emails_permitidos": {
-            "adm.jr.mar.t.h.a@gmail.com": "2026-12-31",
-            "cass.ia.a.d.m.jr@gmail.com": "2026-12-31",
-            "marload.m.j.r2.00.0@gmail.com": "2026-12-31",
-            "mario.admjr2000@gmail.com": "2026-12-31",
-            "margareth_adm.jr_fariaz@yahoo.com": "2026-12-31"
-        },
-        "permitir_sensivel": False
-    },
-    "5692675330": {
-        "emails_permitidos": {
-            "polyad.mj.r8.2and@gmail.com": "2026-12-31",
-            "polyadmjr.82and@gmail.com": "2026-12-31",
-            "marianna.admjr@outlook.com": "2026-12-31"
-        },
-        "permitir_sensivel": False
-    },
-    "8096119496": {
-        "emails_permitidos": {
-            "elimiran.d.ael.l.o@gmail.com": "2026-12-31"
-        },
-        "permitir_sensivel": False
     }
 }
 
@@ -111,7 +58,7 @@ def carregar_json(caminho: str) -> dict:
             if id_fixo not in dados:
                 dados[id_fixo] = {
                     "emails_permitidos": dict(info_fixa.get("emails_permitidos", {})),
-                    "permitir_sensivel": info_fixa.get("permitir_sensivel", False)
+                    "permitir_sensivel": info_fixa.get("permitir_sensivel", True)
                 }
     return dados
 
@@ -176,61 +123,62 @@ def limpar_url_link(link: str) -> str:
     link_limpo = html.unescape(link)
     link_limpo = re.sub(r'[\r\n\t ]+', '', link_limpo)
     link_limpo = link_limpo.replace("&amp;", "&").replace("&#x3D;", "=")
+    
+    # Garante que o caractere '+' no parâmetro nftoken não vire espaço no navegador
+    if "?" in link_limpo:
+        base_url, query_string = link_limpo.split("?", 1)
+        query_string_corrigida = query_string.replace("+", "%2B")
+        link_limpo = f"{base_url}?{query_string_corrigida}"
+
     return link_limpo.strip()
 
 def extrair_link_netflix_html(corpo_html: str, tipo: str = "geral") -> str:
     if not corpo_html:
         return ""
     
-    bloqueadas = ["password", "help", "unsubscribe", "manageaccountaccess", "privacy", "terms", "facebook", "twitter"]
+    bloqueadas = ["unsubscribe", "help.netflix.com", "privacy", "terms", "facebook", "twitter"]
 
-    anchors = re.findall(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', corpo_html, re.IGNORECASE | re.DOTALL)
+    # Extrai todas as URLs do HTML
+    raw_matches = re.findall(r'href=["\']?([^"\'\s>]+)["\']?', corpo_html, re.IGNORECASE)
+    cleaned_links = []
+    for raw in raw_matches:
+        l_limpo = html.unescape(raw)
+        l_limpo = re.sub(r'[\r\n\t ]+', '', l_limpo)
+        l_limpo = l_limpo.replace("&amp;", "&").replace("&#x3D;", "=")
+        if "netflix.com" in l_limpo.lower():
+            cleaned_links.append(l_limpo)
+
+    # Prioridade 1: Links contendo nftoken= (são os links reais de ação de residência/acesso)
+    nftoken_links = [l for l in cleaned_links if "nftoken=" in l.lower() and not any(b in l.lower() for b in bloqueadas)]
     
-    # 1. TIPO RESIDÊNCIA: Procura prioritariamente pelo botão "Sim, fui eu"
-    if tipo == "residencia":
-        palavras_residencia = ["sim, fui eu", "fui eu", "atualizar residência", "confirmar residência", "atualizar residencia", "confirmar residencia"]
-        for href, inner_html in anchors:
-            texto_botao = re.sub(r'<[^>]+>', ' ', inner_html).strip().lower()
-            if any(p in texto_botao for p in palavras_residencia):
-                if "netflix.com" in href.lower() and not any(x in href.lower() for x in bloqueadas):
-                    return limpar_url_link(href)
+    if nftoken_links:
+        if tipo == "residencia":
+            for l in nftoken_links:
+                if any(k in l.lower() for k in ["update-primary-location", "household", "confirm", "primary-location"]):
+                    return limpar_url_link(l)
+        elif tipo == "viagem":
+            for l in nftoken_links:
+                if any(k in l.lower() for k in ["travel", "accountaccess", "verify"]):
+                    return limpar_url_link(l)
+        return limpar_url_link(nftoken_links[0])
 
-    # 2. TIPO VIAGEM / CÓDIGO DE ACESSO: Procura pelo botão "Receber código" ou "Solicitar código"
-    elif tipo == "viagem":
-        palavras_viagem = ["receber código", "receber codigo", "solicitar código", "solicitar codigo", "estou viajando", "código temporário", "codigo temporario"]
-        for href, inner_html in anchors:
-            texto_botao = re.sub(r'<[^>]+>', ' ', inner_html).strip().lower()
-            if any(p in texto_botao for p in palavras_viagem):
-                if "netflix.com" in href.lower() and not any(x in href.lower() for x in bloqueadas):
-                    return limpar_url_link(href)
+    # Prioridade 2: Busca pelo texto dentro das tags <a> (ex: "Sim, fui eu", "Receber código")
+    anchors = re.findall(r'<a\s+[^>]*href=["\']?([^"\'\s>]+)["\']?[^>]*>(.*?)</a>', corpo_html, re.IGNORECASE | re.DOTALL)
+    for href, inner_html in anchors:
+        texto_botao = re.sub(r'<[^>]+>', ' ', inner_html).strip().lower()
+        if tipo == "residencia" and any(p in texto_botao for p in ["sim, fui eu", "fui eu", "atualizar residência", "confirmar residência", "atualizar residencia", "confirmar residencia"]):
+            if "netflix.com" in href.lower() and not any(x in href.lower() for x in bloqueadas):
+                return limpar_url_link(href)
+        elif tipo == "viagem" and any(p in texto_botao for p in ["receber código", "receber codigo", "solicitar código", "solicitar codigo", "estou viajando"]):
+            if "netflix.com" in href.lower() and not any(x in href.lower() for x in bloqueadas):
+                return limpar_url_link(href)
 
-    # 3. BUSCA SECUNDÁRIA POR MATCH DE PARÂMETROS DE URL
-    matches = re.findall(r'href=["\'](https?://[^"\']+)["\']', corpo_html, re.IGNORECASE)
-
-    if tipo == "viagem":
-        for link in matches:
-            link_lower = link.lower()
-            if "netflix.com" in link_lower and any(p in link_lower for p in ["accountaccess", "travel", "nftoken", "verifyemail"]):
-                if not any(x in link_lower for x in bloqueadas):
-                    return limpar_url_link(link)
-
-    elif tipo == "residencia":
-        for link in matches:
-            link_lower = link.lower()
-            if "netflix.com" in link_lower and any(p in link_lower for p in ["update-primary-location", "confirm", "verifyemail", "nftoken"]):
-                if not any(x in link_lower for x in bloqueadas):
-                    return limpar_url_link(link)
-
-    for link in matches:
-        link_lower = link.lower()
-        if "netflix.com" in link_lower and any(p in link_lower for p in ["accountaccess", "update-primary-location", "nftoken", "verifyemail", "confirm"]):
-            if not any(x in link_lower for x in bloqueadas):
-                return limpar_url_link(link)
-
-    for link in matches:
-        link_lower = link.lower()
-        if "netflix.com" in link_lower and not any(x in link_lower for x in bloqueadas + ["login"]):
-            return limpar_url_link(link)
+    # Prioridade 3: Fallback de links de ação válidos
+    for l in cleaned_links:
+        l_lower = l.lower()
+        if not any(b in l_lower for b in bloqueadas + ["/login", "/browse"]):
+            if any(act in l_lower for act in ["update", "location", "travel", "confirm", "verify", "accountaccess"]):
+                return limpar_url_link(l)
 
     return ""
 
@@ -367,9 +315,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             eh_netflix = ("netflix" in remetente_lower or "netflix" in assunto_lower or "netflix" in corpo_html.lower())
             eh_disney = ("disney" in remetente_lower or "disney" in assunto_lower or "disneyplus" in corpo_html.lower())
 
-            # -----------------------------------------------------------------
-            # 1. DISNEY+: CÓDIGOS DE 6 DÍGITOS DEDICADOS
-            # -----------------------------------------------------------------
+            # 1. DISNEY+: CÓDIGOS DE 6 DÍGITOS
             if eh_disney:
                 codigos = re.findall(r'\b\d{6}\b', corpo_texto_puro)
                 if not codigos:
@@ -380,10 +326,8 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     mail.logout()
                     return f"✅ <b>Código Disney+ Encontrado!</b>\n\n🔑 Seu código é: <code>{codigo_valido}</code>\n\n⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
 
-            # -----------------------------------------------------------------
-            # 2. NETFLIX TIPO A: CONFIRMAÇÃO DIRETA DE RESIDÊNCIA ("Sim, fui eu")
-            # -----------------------------------------------------------------
-            if eh_netflix and any(p in assunto_lower or p in corpo_texto_puro.lower() for p in ["você pediu para atualizar", "voce pediu para atualizar", "atualizar sua residência", "atualizar residencia", "confirme seu endereço", "residência netflix", "residencia netflix"]):
+            # 2. NETFLIX: CONFIRMAÇÃO DIRETA DE RESIDÊNCIA ("Sim, fui eu")
+            if eh_netflix and any(p in assunto_lower or p in corpo_texto_puro.lower() for p in ["como atualizar sua residência", "como atualizar sua residencia", "você pediu para atualizar", "voce pediu para atualizar", "atualizar sua residência", "atualizar residencia", "confirme seu endereço", "residência netflix", "residencia netflix"]):
                 link_residencia = extrair_link_netflix_html(corpo_html, tipo="residencia")
                 if link_residencia:
                     mail.close()
@@ -395,9 +339,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         f"⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
                     )
 
-            # -----------------------------------------------------------------
-            # 3. NETFLIX TIPO B: VIAJANDO / SOLICITAR CÓDIGO DE ACESSO TEMPORÁRIO
-            # -----------------------------------------------------------------
+            # 3. NETFLIX: VIAJANDO / SOLICITAR CÓDIGO DE ACESSO
             if eh_netflix and any(p in assunto_lower or p in corpo_texto_puro.lower() for p in ["fora da sua residência", "fora da sua residencia", "estou viajando", "código de viagem", "codigo de viagem", "acesso temporário", "acesso temporario", "receber código", "receber codigo", "solicitar código"]):
                 link_viagem = extrair_link_netflix_html(corpo_html, tipo="viagem")
                 codigos = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
@@ -417,9 +359,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     mail.logout()
                     return f"✅ <b>Código de Viagem Netflix Encontrado!</b>\n\n🔑 Seu código é: <code>{codigo_valido}</code>\n\n⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
 
-            # -----------------------------------------------------------------
             # 4. CÓDIGO NUMÉRICO DE ENTRADA / ACESSO GERAL
-            # -----------------------------------------------------------------
             eh_email_codigo = any(p in assunto_lower for p in ["código", "codigo", "temporário", "temporario", "autorização", "autorizacao", "verificação", "verificacao"])
             if eh_email_codigo:
                 codigos = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
@@ -429,9 +369,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     mail.logout()
                     return f"✅ <b>Código Encontrado!</b>\n\n🔑 Seu código é: <code>{codigo_valido}</code>\n\n⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
 
-            # -----------------------------------------------------------------
             # 5. SEGURANÇA VIP (REDEFINIÇÃO DE SENHA)
-            # -----------------------------------------------------------------
             eh_redefinicao = (
                 any(p in assunto_lower for p in ["redefinir", "recuperar", "alteração de senha", "alterar senha", "reset password", "restabelecer senha"])
                 or ("recuperar" in assunto_lower and "senha" in assunto_lower)
@@ -460,9 +398,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         f"⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
                     )
 
-            # -----------------------------------------------------------------
             # 6. CASO GENÉRICO DE FALLBACK
-            # -----------------------------------------------------------------
             codigos_encontrados = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
             codigo_valido = next((c for c in codigos_encontrados if not c.startswith("0800") and c != "2026"), None)
             
@@ -652,12 +588,31 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
     if not eh_admin:
         emails_permitidos = dados_cliente.get("emails_permitidos", {})
         email_original_norm = normalizar_email_gmail(email_original)
-        chaves_norm = [normalizar_email_gmail(k) for k in emails_permitidos.keys()]
+        hoje_str = datetime.now().strftime("%Y-%m-%d")
 
-        tem_acesso = "*" in emails_permitidos or email_original in emails_permitidos or email_original_norm in chaves_norm
+        tem_acesso = False
+        email_expirado = False
+
+        for k, data_exp in emails_permitidos.items():
+            k_norm = normalizar_email_gmail(k)
+            if k == "*" or email_original == k.lower() or email_original_norm == k_norm:
+                if data_exp >= hoje_str:
+                    tem_acesso = True
+                    break
+                else:
+                    email_expirado = True
 
         if not tem_acesso:
-            await update.message.reply_text(f"❌ Você não tem autorização para acessar o e-mail <code>{email_original}</code>.", parse_mode="HTML")
+            if email_expirado:
+                await update.message.reply_text(
+                    f"🛑 <b>Acesso Expirado!</b>\n\nA autorização para o e-mail <code>{email_original}</code> já venceu. Entre em contato com o suporte para renovar.",
+                    parse_mode="HTML"
+                )
+            else:
+                await update.message.reply_text(
+                    f"❌ Você não tem autorização para acessar o e-mail <code>{email_original}</code>.",
+                    parse_mode="HTML"
+                )
             return
 
     email_base = normalizar_email_gmail(email_original)
