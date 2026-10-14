@@ -124,7 +124,6 @@ def limpar_url_link(link: str) -> str:
     link_limpo = re.sub(r'[\r\n\t ]+', '', link_limpo)
     link_limpo = link_limpo.replace("&amp;", "&").replace("&#x3D;", "=")
     
-    # Garante que o caractere '+' no parâmetro nftoken não vire espaço no navegador
     if "?" in link_limpo:
         base_url, query_string = link_limpo.split("?", 1)
         query_string_corrigida = query_string.replace("+", "%2B")
@@ -138,7 +137,6 @@ def extrair_link_netflix_html(corpo_html: str, tipo: str = "geral") -> str:
     
     bloqueadas = ["unsubscribe", "help.netflix.com", "privacy", "terms", "facebook", "twitter"]
 
-    # Extrai todas as URLs do HTML
     raw_matches = re.findall(r'href=["\']?([^"\'\s>]+)["\']?', corpo_html, re.IGNORECASE)
     cleaned_links = []
     for raw in raw_matches:
@@ -148,7 +146,6 @@ def extrair_link_netflix_html(corpo_html: str, tipo: str = "geral") -> str:
         if "netflix.com" in l_limpo.lower():
             cleaned_links.append(l_limpo)
 
-    # Prioridade 1: Links contendo nftoken= (são os links reais de ação de residência/acesso)
     nftoken_links = [l for l in cleaned_links if "nftoken=" in l.lower() and not any(b in l.lower() for b in bloqueadas)]
     
     if nftoken_links:
@@ -162,7 +159,6 @@ def extrair_link_netflix_html(corpo_html: str, tipo: str = "geral") -> str:
                     return limpar_url_link(l)
         return limpar_url_link(nftoken_links[0])
 
-    # Prioridade 2: Busca pelo texto dentro das tags <a> (ex: "Sim, fui eu", "Receber código")
     anchors = re.findall(r'<a\s+[^>]*href=["\']?([^"\'\s>]+)["\']?[^>]*>(.*?)</a>', corpo_html, re.IGNORECASE | re.DOTALL)
     for href, inner_html in anchors:
         texto_botao = re.sub(r'<[^>]+>', ' ', inner_html).strip().lower()
@@ -173,7 +169,6 @@ def extrair_link_netflix_html(corpo_html: str, tipo: str = "geral") -> str:
             if "netflix.com" in href.lower() and not any(x in href.lower() for x in bloqueadas):
                 return limpar_url_link(href)
 
-    # Prioridade 3: Fallback de links de ação válidos
     for l in cleaned_links:
         l_lower = l.lower()
         if not any(b in l_lower for b in bloqueadas + ["/login", "/browse"]):
@@ -315,7 +310,9 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             eh_netflix = ("netflix" in remetente_lower or "netflix" in assunto_lower or "netflix" in corpo_html.lower())
             eh_disney = ("disney" in remetente_lower or "disney" in assunto_lower or "disneyplus" in corpo_html.lower())
 
+            # -----------------------------------------------------------------
             # 1. DISNEY+: CÓDIGOS DE 6 DÍGITOS
+            # -----------------------------------------------------------------
             if eh_disney:
                 codigos = re.findall(r'\b\d{6}\b', corpo_texto_puro)
                 if not codigos:
@@ -326,7 +323,20 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     mail.logout()
                     return f"✅ <b>Código Disney+ Encontrado!</b>\n\n🔑 Seu código é: <code>{codigo_valido}</code>\n\n⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
 
-            # 2. NETFLIX: CONFIRMAÇÃO DIRETA DE RESIDÊNCIA ("Sim, fui eu")
+            # -----------------------------------------------------------------
+            # 2. NETFLIX: CÓDIGO DE ACESSO (LOGIN / INFORME ESTE CÓDIGO PARA ENTRAR)
+            # -----------------------------------------------------------------
+            if eh_netflix and any(p in assunto_lower or p in corpo_texto_puro.lower() for p in ["seu código de acesso", "seu codigo de acesso", "informe este código para entrar", "informe este codigo para entrar"]):
+                codigos = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
+                codigo_valido = next((c for c in codigos if not c.startswith("0800") and c != "2026"), None)
+                if codigo_valido:
+                    mail.close()
+                    mail.logout()
+                    return f"✅ <b>Código de Acesso Netflix Encontrado!</b>\n\n🔑 Seu código é: <code>{codigo_valido}</code>\n\n⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
+
+            # -----------------------------------------------------------------
+            # 3. NETFLIX: CONFIRMAÇÃO DIRETA DE RESIDÊNCIA ("Sim, fui eu")
+            # -----------------------------------------------------------------
             if eh_netflix and any(p in assunto_lower or p in corpo_texto_puro.lower() for p in ["como atualizar sua residência", "como atualizar sua residencia", "você pediu para atualizar", "voce pediu para atualizar", "atualizar sua residência", "atualizar residencia", "confirme seu endereço", "residência netflix", "residencia netflix"]):
                 link_residencia = extrair_link_netflix_html(corpo_html, tipo="residencia")
                 if link_residencia:
@@ -339,7 +349,9 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         f"⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
                     )
 
-            # 3. NETFLIX: VIAJANDO / SOLICITAR CÓDIGO DE ACESSO
+            # -----------------------------------------------------------------
+            # 4. NETFLIX: VIAJANDO / SOLICITAR CÓDIGO DE ACESSO TEMPORÁRIO
+            # -----------------------------------------------------------------
             if eh_netflix and any(p in assunto_lower or p in corpo_texto_puro.lower() for p in ["fora da sua residência", "fora da sua residencia", "estou viajando", "código de viagem", "codigo de viagem", "acesso temporário", "acesso temporario", "receber código", "receber codigo", "solicitar código"]):
                 link_viagem = extrair_link_netflix_html(corpo_html, tipo="viagem")
                 codigos = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
@@ -359,7 +371,9 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     mail.logout()
                     return f"✅ <b>Código de Viagem Netflix Encontrado!</b>\n\n🔑 Seu código é: <code>{codigo_valido}</code>\n\n⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
 
-            # 4. CÓDIGO NUMÉRICO DE ENTRADA / ACESSO GERAL
+            # -----------------------------------------------------------------
+            # 5. CÓDIGO NUMÉRICO DE ENTRADA / ACESSO GERAL
+            # -----------------------------------------------------------------
             eh_email_codigo = any(p in assunto_lower for p in ["código", "codigo", "temporário", "temporario", "autorização", "autorizacao", "verificação", "verificacao"])
             if eh_email_codigo:
                 codigos = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
@@ -369,7 +383,9 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     mail.logout()
                     return f"✅ <b>Código Encontrado!</b>\n\n🔑 Seu código é: <code>{codigo_valido}</code>\n\n⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
 
-            # 5. SEGURANÇA VIP (REDEFINIÇÃO DE SENHA)
+            # -----------------------------------------------------------------
+            # 6. SEGURANÇA VIP (REDEFINIÇÃO DE SENHA)
+            # -----------------------------------------------------------------
             eh_redefinicao = (
                 any(p in assunto_lower for p in ["redefinir", "recuperar", "alteração de senha", "alterar senha", "reset password", "restabelecer senha"])
                 or ("recuperar" in assunto_lower and "senha" in assunto_lower)
@@ -398,7 +414,9 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         f"⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
                     )
 
-            # 6. CASO GENÉRICO DE FALLBACK
+            # -----------------------------------------------------------------
+            # 7. CASO GENÉRICO DE FALLBACK
+            # -----------------------------------------------------------------
             codigos_encontrados = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
             codigo_valido = next((c for c in codigos_encontrados if not c.startswith("0800") and c != "2026"), None)
             
