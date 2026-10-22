@@ -14,17 +14,34 @@ from flask import Flask
 from email.utils import parsedate_to_datetime
 from email.header import decode_header
 from datetime import datetime, timezone, timedelta
+from supabase import create_client, Client
 
+# ==========================================
+# LOGS E CONFIGURAÇÕES
+# ==========================================
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 
-TOKEN_TELEGRAM = os.environ.get("TOKEN_TELEGRAM", "SEU_TOKEN_AQUI")
-ADMIN_ID = 7496198484
+TOKEN_TELEGRAM = os.environ.get("TOKEN_TELEGRAM", "SEU_TOKEN_AQUI").strip()
+ADMIN_ID = os.environ.get("ADMIN_ID", "7496198484").strip()
+
+RAW_SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip()
+RAW_SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "").strip()
+SUPABASE_URL = RAW_SUPABASE_URL.rstrip("/").strip("'").strip('"')
+SUPABASE_KEY = RAW_SUPABASE_KEY.strip("'").strip('"')
+
+supabase: Client = None
+if SUPABASE_URL and SUPABASE_KEY:
+    try:
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        logging.info("✅ Supabase conectado com sucesso para persistência de IDs e datas!")
+    except Exception as e:
+        logging.error(f"⚠️ Erro ao inicializar Supabase: {e}")
 
 CLIENTES_FIXOS_PADRAO = {
-    "7496198484": {
+    str(ADMIN_ID): {
         "emails_permitidos": {"*": "2030-12-31"},
         "permitir_sensivel": True
     },
@@ -34,6 +51,9 @@ CLIENTES_FIXOS_PADRAO = {
     }
 }
 
+# ==========================================
+# SERVIDOR FLASK PARA HEALTH CHECK (RENDER)
+# ==========================================
 app_flask = Flask('')
 
 @app_flask.route('/')
@@ -44,7 +64,74 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app_flask.run(host='0.0.0.0', port=port)
 
+# ==========================================
+# BANCO DE DADOS E PERSISTÊNCIA (JSON / SUPABASE)
+# ==========================================
+def carregar_clientes_db() -> dict:
+    dados = {}
+    
+    # 1. Tenta buscar dados do Supabase
+    if supabase:
+        try:
+            res = supabase.table("clientes_bot").select("*").execute()
+            if res.data:
+                for row in res.data:
+                    t_id = str(row.get("telegram_id")).strip()
+                    emails = row.get("emails_permitidos") or {}
+                    permitir = bool(row.get("permitir_sensivel", False))
+                    dados[t_id] = {
+                        "emails_permitidos": emails,
+                        "permitir_sensivel": permitir
+                    }
+        except Exception as e:
+            logging.error(f"Erro ao carregar clientes do Supabase: {e}")
+
+    # 2. Fallback para arquivo local se Supabase estiver vazio ou indisponível
+    if not dados and os.path.exists("clientes.json"):
+        try:
+            with open("clientes.json", "r", encoding="utf-8") as f:
+                dados = json.load(f)
+        except Exception as e:
+            logging.error(f"Erro ao ler clientes.json local: {e}")
+
+    # 3. Garante que os clientes fixos estejam sempre presentes
+    for id_fixo, info_fixa in CLIENTES_FIXOS_PADRAO.items():
+        if id_fixo not in dados:
+            dados[id_fixo] = {
+                "emails_permitidos": dict(info_fixa.get("emails_permitidos", {})),
+                "permitir_sensivel": info_fixa.get("permitir_sensivel", True)
+            }
+
+    return dados
+
+def salvar_clientes_db(dados: dict):
+    # 1. Salva localmente em clientes.json (backup local)
+    try:
+        caminho_tmp = "clientes.json.tmp"
+        with open(caminho_tmp, "w", encoding="utf-8") as f:
+            json.dump(dados, f, indent=2, ensure_ascii=False)
+        os.replace(caminho_tmp, "clientes.json")
+    except Exception as e:
+        logging.error(f"Erro ao salvar clientes.json local: {e}")
+
+    # 2. Persiste no Supabase para sobreviver a reinicializações do Render
+    if supabase:
+        try:
+            for telegram_id, info in dados.items():
+                payload = {
+                    "telegram_id": str(telegram_id).strip(),
+                    "emails_permitidos": info.get("emails_permitidos", {}),
+                    "permitir_sensivel": bool(info.get("permitir_sensivel", False)),
+                    "updated_at": datetime.now(timezone.utc).isoformat()
+                }
+                supabase.table("clientes_bot").upsert(payload).execute()
+        except Exception as e:
+            logging.error(f"Erro ao salvar no Supabase: {e}")
+
 def carregar_json(caminho: str) -> dict:
+    if caminho == "clientes.json":
+        return carregar_clientes_db()
+
     dados = {}
     try:
         if os.path.exists(caminho):
@@ -52,17 +139,13 @@ def carregar_json(caminho: str) -> dict:
                 dados = json.load(f)
     except Exception as e:
         logging.error(f"Erro ao carregar {caminho}: {e}")
-
-    if caminho == "clientes.json":
-        for id_fixo, info_fixa in CLIENTES_FIXOS_PADRAO.items():
-            if id_fixo not in dados:
-                dados[id_fixo] = {
-                    "emails_permitidos": dict(info_fixa.get("emails_permitidos", {})),
-                    "permitir_sensivel": info_fixa.get("permitir_sensivel", True)
-                }
     return dados
 
 def salvar_json(caminho: str, dados: dict):
+    if caminho == "clientes.json":
+        salvar_clientes_db(dados)
+        return
+
     try:
         caminho_tmp = f"{caminho}.tmp"
         with open(caminho_tmp, "w", encoding="utf-8") as f:
@@ -71,6 +154,9 @@ def salvar_json(caminho: str, dados: dict):
     except Exception as e:
         logging.error(f"Erro ao salvar {caminho}: {e}")
 
+# ==========================================
+# FUNÇÕES PROCESSAMENTO E EXTRAÇÃO DE E-MAIL (ORIGINAIS)
+# ==========================================
 def normalizar_email_gmail(email_str: str) -> str:
     if not email_str:
         return ""
@@ -130,7 +216,6 @@ def limpar_url_link(link: str) -> str:
 def extrair_link_netflix_html(corpo_html: str, tipo: str = "geral") -> str:
     if not corpo_html:
         return ""
-    
     bloqueadas = ["unsubscribe", "help.netflix.com", "privacy", "terms", "facebook", "twitter"]
 
     raw_matches = re.findall(r'href=["\']?([^"\'\s>]+)["\']?', corpo_html, re.IGNORECASE)
@@ -143,7 +228,6 @@ def extrair_link_netflix_html(corpo_html: str, tipo: str = "geral") -> str:
             cleaned_links.append(l_limpo)
 
     nftoken_links = [l for l in cleaned_links if ("nftoken=" in l.lower() or "accountaccess" in l.lower()) and not any(b in l.lower() for b in bloqueadas)]
-    
     if nftoken_links:
         if tipo == "residencia":
             for l in nftoken_links:
@@ -176,7 +260,6 @@ def extrair_link_netflix_html(corpo_html: str, tipo: str = "geral") -> str:
 def extrair_link_hbomax_html(corpo_html: str) -> str:
     if not corpo_html:
         return ""
-    
     palavras_hbomax = ["restabelecer", "redefinir", "reset", "nova senha", "alterar senha", "criar senha"]
     anchors = re.findall(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', corpo_html, re.IGNORECASE | re.DOTALL)
     for href, inner_html in anchors:
@@ -214,7 +297,6 @@ def extrair_link_redefinicao_html(corpo_html: str) -> str:
         link_lower = link.lower()
         if not any(x in link_lower for x in ["unsubscribe", "help", "privacy", "terms", "facebook", "twitter"]):
             return limpar_url_link(link)
-            
     return ""
 
 def extrair_url_pura_href(corpo_html: str, termo_busca: str = "http") -> str:
@@ -228,16 +310,14 @@ def extrair_url_pura_href(corpo_html: str, termo_busca: str = "http") -> str:
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
     email_usuario = dados_conta.get("email_usuario")
-    
-    if "yahoo" in email_usuario:
+    if "yahoo" in str(email_usuario):
         host = dados_conta.get("host_imap", "imap.mail.yahoo.com")
-    elif "outlook" in email_usuario or "hotmail" in email_usuario:
+    elif "outlook" in str(email_usuario) or "hotmail" in str(email_usuario):
         host = dados_conta.get("host_imap", "outlook.office365.com")
     else:
         host = dados_conta.get("host_imap", "imap.gmail.com")
-        
     porta = dados_conta.get("porta", 993)
-    senha = dados_conta.get("senha_imap")
+    senha = dados_conta.get("senha_imap") or dados_conta.get("senha") or dados_conta.get("password") or dados_conta.get("pass")
 
     mail = None
     try:
@@ -345,7 +425,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 link_viagem = extrair_link_netflix_html(corpo_html, tipo="viagem")
                 codigos = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
                 codigo_valido = next((c for c in codigos if not c.startswith("0800") and c != "2026"), None)
-                
                 if link_viagem:
                     mail.close()
                     mail.logout()
@@ -382,7 +461,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     mail.close()
                     mail.logout()
                     return "🚫 <b>Solicitação Não Permitida!</b>\n\nEste e-mail trata de redefinição de senha ou alteração de dados."
-                
                 if "hbomax" in remetente_lower or "max.com" in remetente_lower or "hbo" in assunto_lower:
                     link_vip = extrair_link_hbomax_html(corpo_html)
                 elif eh_netflix:
@@ -403,7 +481,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             # 7. CASO GENÉRICO DE FALLBACK
             codigos_encontrados = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
             codigo_valido = next((c for c in codigos_encontrados if not c.startswith("0800") and c != "2026"), None)
-            
             if codigo_valido:
                 mail.close()
                 mail.logout()
@@ -438,6 +515,9 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
         except Exception:
             pass
 
+# ==========================================
+# HANDLERS DO TELEGRAM (ORIGINAIS)
+# ==========================================
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -470,7 +550,6 @@ async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id_cliente = str(context.args[0]).strip()
         email_cliente_raw = context.args[1].strip().lower()
         dias = int(context.args[2])
-        
         liberar_sensivel = False
         if len(context.args) > 3 and context.args[3].lower() in ["vip", "sensivel", "true", "todos", "sim"]:
             liberar_sensivel = True
@@ -524,7 +603,6 @@ async def limpar_nao_vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for email_end, data_exp in emails.items():
             if email_end != "*" and data_exp < hoje_str:
                 para_remover.append(email_end)
-        
         for email_vencido in para_remover:
             del dados["emails_permitidos"][email_vencido]
             emails_removidos += 1
@@ -553,11 +631,9 @@ async def listar_clientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for id_cliente, dados in clientes.items():
         emails = dados.get("emails_permitidos", {})
         vip = "Sim" if dados.get("permitir_sensivel") else "Não"
-        
         mensagem += f"👤 <b>ID:</b> <code>{id_cliente}</code> | <b>VIP:</b> {vip}\n"
-        
         if not emails:
-            mensagem += "   └ ⚠️ Nenhum e-mail liberado.\n"
+            mensagem += " └ ⚠️ Nenhum e-mail liberado.\n"
         else:
             for email_end, data_exp in emails.items():
                 try:
@@ -567,7 +643,7 @@ async def listar_clientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     status_dias = "❓ Data inválida"
 
-                mensagem += f"   └ 📧 <code>{email_end}</code>\n      📅 Validade: {data_exp} ({status_dias})\n"
+                mensagem += f" └ 📧 <code>{email_end}</code>\n 📅 Validade: {data_exp} ({status_dias})\n"
         mensagem += "\n"
 
     if len(mensagem) > 4000:
@@ -629,13 +705,14 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
     # Mapeia o e-mail estritamente liberado para a caixa correspondente no contas.json
     email_base = normalizar_email_gmail(email_original)
     contas = carregar_json("contas.json")
-    
     conta_encontrada = None
-    for chave_email, dados in contas.items():
-        chave_norm = normalizar_email_gmail(chave_email)
-        if chave_email.strip().lower() == email_original or chave_norm == email_base:
-            conta_encontrada = dados
-            break
+    
+    if isinstance(contas, dict):
+        for chave_email, dados in contas.items():
+            chave_norm = normalizar_email_gmail(chave_email)
+            if chave_email.strip().lower() == email_original or chave_norm == email_base:
+                conta_encontrada = dados if isinstance(dados, dict) else {"senha": dados}
+                break
 
     if not conta_encontrada:
         await update.message.reply_text(
@@ -665,6 +742,9 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
     except Exception as e:
         logging.error(f"Erro ao editar mensagem: {e}")
 
+# ==========================================
+# INICIALIZAÇÃO
+# ==========================================
 def main():
     Thread(target=run_flask, daemon=True).start()
 
@@ -679,7 +759,7 @@ def main():
             app.add_handler(CommandHandler("listar", listar_clientes))
             app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receber_mensagem_email))
 
-            print("🤖 Bot iniciado e rodando com alta estabilidade...")
+            print("🤖 Bot iniciado e rodando com alta estabilidade no Render...")
             app.run_polling(poll_interval=1.0, timeout=20)
         except Exception as e:
             logging.error(f"Ocorreu uma queda temporária no Bot: {e}. Reconectando em 5 segundos...")
