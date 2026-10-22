@@ -1,23 +1,32 @@
-import json
-import logging
-import re
-import imaplib
-import email
 import os
-import socket
-import asyncio
+import re
+import json
+import time
 import html
 import quopri
-import time
+import socket
+import imaplib
+import email
+import logging
+import asyncio
 from threading import Thread
-from flask import Flask
+from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
 from email.header import decode_header
-from datetime import datetime, timezone, timedelta
+
+from flask import Flask
 from supabase import create_client, Client
+from telegram import Update
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
 
 # ==========================================
-# LOGS E CONFIGURAÇÕES
+# LOGS E CONFIGURAÇÕES DE AMBIENTE
 # ==========================================
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -36,7 +45,7 @@ supabase: Client = None
 if SUPABASE_URL and SUPABASE_KEY:
     try:
         supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-        logging.info("✅ Supabase conectado com sucesso para persistência de IDs e datas!")
+        logging.info("✅ Supabase conectado para persistência de dados!")
     except Exception as e:
         logging.error(f"⚠️ Erro ao inicializar Supabase: {e}")
 
@@ -52,7 +61,7 @@ CLIENTES_FIXOS_PADRAO = {
 }
 
 # ==========================================
-# SERVIDOR FLASK PARA HEALTH CHECK (RENDER)
+# SERVIDOR FLASK (HEALTH CHECK DO RENDER)
 # ==========================================
 app_flask = Flask('')
 
@@ -65,12 +74,10 @@ def run_flask():
     app_flask.run(host='0.0.0.0', port=port)
 
 # ==========================================
-# BANCO DE DADOS E PERSISTÊNCIA (JSON / SUPABASE)
+# BANCO DE DADOS E PERSISTÊNCIA
 # ==========================================
 def carregar_clientes_db() -> dict:
     dados = {}
-    
-    # 1. Tenta buscar dados do Supabase
     if supabase:
         try:
             res = supabase.table("clientes_bot").select("*").execute()
@@ -86,7 +93,6 @@ def carregar_clientes_db() -> dict:
         except Exception as e:
             logging.error(f"Erro ao carregar clientes do Supabase: {e}")
 
-    # 2. Fallback para arquivo local se Supabase estiver vazio ou indisponível
     if not dados and os.path.exists("clientes.json"):
         try:
             with open("clientes.json", "r", encoding="utf-8") as f:
@@ -94,7 +100,6 @@ def carregar_clientes_db() -> dict:
         except Exception as e:
             logging.error(f"Erro ao ler clientes.json local: {e}")
 
-    # 3. Garante que os clientes fixos estejam sempre presentes
     for id_fixo, info_fixa in CLIENTES_FIXOS_PADRAO.items():
         if id_fixo not in dados:
             dados[id_fixo] = {
@@ -105,7 +110,6 @@ def carregar_clientes_db() -> dict:
     return dados
 
 def salvar_clientes_db(dados: dict):
-    # 1. Salva localmente em clientes.json (backup local)
     try:
         caminho_tmp = "clientes.json.tmp"
         with open(caminho_tmp, "w", encoding="utf-8") as f:
@@ -114,7 +118,6 @@ def salvar_clientes_db(dados: dict):
     except Exception as e:
         logging.error(f"Erro ao salvar clientes.json local: {e}")
 
-    # 2. Persiste no Supabase para sobreviver a reinicializações do Render
     if supabase:
         try:
             for telegram_id, info in dados.items():
@@ -155,7 +158,7 @@ def salvar_json(caminho: str, dados: dict):
         logging.error(f"Erro ao salvar {caminho}: {e}")
 
 # ==========================================
-# FUNÇÕES PROCESSAMENTO E EXTRAÇÃO DE E-MAIL (ORIGINAIS)
+# MOTOR ORIGINAL DE TRATAMENTO E EXTRAÇÃO IMAP
 # ==========================================
 def normalizar_email_gmail(email_str: str) -> str:
     if not email_str:
@@ -516,17 +519,8 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             pass
 
 # ==========================================
-# HANDLERS DO TELEGRAM (ORIGINAIS)
+# COMANDOS E RESPOSTAS DO BOT TELEGRAM
 # ==========================================
-from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    filters,
-    ContextTypes
-)
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id).strip()
     clientes = carregar_json("clientes.json")
@@ -569,7 +563,6 @@ async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if "emails_permitidos" not in clientes[user_id_cliente]:
             clientes[user_id_cliente]["emails_permitidos"] = {}
 
-        # Gravação ESTRITA da grafia exata do e-mail digitado
         clientes[user_id_cliente]["emails_permitidos"][email_cliente_raw] = data_validade
 
         salvar_json("clientes.json", clientes)
@@ -680,7 +673,6 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
         tem_acesso = False
         email_expirado = False
 
-        # Validação estrita por igualdade exata (string idêntica em minúsculas)
         for k, data_exp in emails_permitidos.items():
             if k == "*" or email_original == k.lower():
                 if data_exp >= hoje_str:
@@ -702,7 +694,6 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
                 )
             return
 
-    # Mapeia o e-mail estritamente liberado para a caixa correspondente no contas.json
     email_base = normalizar_email_gmail(email_original)
     contas = carregar_json("contas.json")
     conta_encontrada = None
@@ -743,7 +734,7 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
         logging.error(f"Erro ao editar mensagem: {e}")
 
 # ==========================================
-# INICIALIZAÇÃO
+# EXECUÇÃO DO BOT
 # ==========================================
 def main():
     Thread(target=run_flask, daemon=True).start()
@@ -759,7 +750,7 @@ def main():
             app.add_handler(CommandHandler("listar", listar_clientes))
             app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receber_mensagem_email))
 
-            print("🤖 Bot iniciado e rodando com alta estabilidade no Render...")
+            print("🤖 Bot iniciado e rodando no Render...")
             app.run_polling(poll_interval=1.0, timeout=20)
         except Exception as e:
             logging.error(f"Ocorreu uma queda temporária no Bot: {e}. Reconectando em 5 segundos...")
