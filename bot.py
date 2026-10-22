@@ -141,7 +141,7 @@ def validar_email_estrito(telegram_id: str, email_informado: str) -> bool:
     """
     REGRA DE VALIDAÇÃO DE ACESSO:
     1. Administrador (ADMIN_ID): Acesso ilimitado a qualquer e-mail.
-    2. Cliente VIP (permitir_sensivel = True): Acesso ilimitado a qualquer e-mail sem exigir vínculo prévio.
+    2. Cliente VIP (permitir_sensivel = True): Acesso ilimitado a qualquer e-mail.
     3. Cliente Comum: Exige vínculo do e-mail exato e verificação de expiração.
     """
     if eh_admin(telegram_id):
@@ -149,7 +149,6 @@ def validar_email_estrito(telegram_id: str, email_informado: str) -> bool:
 
     cliente = obter_cliente(telegram_id)
     
-    # LIBERAÇÃO VIP: Se o cliente tiver permissão VIP ativada, libera a busca de qualquer e-mail
     if cliente.get("permitir_sensivel"):
         return True
 
@@ -312,13 +311,16 @@ def buscar_codigos_streaming(email_destino: str) -> list:
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando inicial do bot."""
+    user_id = update.effective_user.id
     texto = (
         "👋 **Bem-vindo ao Bot de Atendimento de Streamings!**\n\n"
+        f"🆔 **Seu Telegram ID:** `{user_id}`\n\n"
         "Envie o e-mail cadastrado exato para solicitar acessos, códigos ou redefinições:\n"
         "• **Netflix**: Confirmação de residência principal, links de viagem e códigos de acesso direto.\n"
         "• **Disney+**: Códigos numéricos de 6 dígitos.\n"
         "• **HBO Max / Globo**: Links de redefinição e acesso.\n\n"
-        "⚠️ *Atenção: O e-mail deve ser digitado exatamente como foi cadastrado (respeitando maiúsculas, minúsculas e pontos).* "
+        "📌 *Primeiro acesso ou precisa liberar novo e-mail?*\n"
+        f"Copie e envie o seu **ID (`{user_id}`)** e o login completo no PV do **ADM JR** para realizar a liberação no sistema!"
     )
     await update.message.reply_text(texto, parse_mode="Markdown")
 
@@ -468,11 +470,6 @@ async def listar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(texto, parse_mode="Markdown")
 
 async def vip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Ativa/Desativa o acesso VIP para um ID.
-    Uso: /vip <telegram_id> <sim ou nao>
-    Exemplo: /vip 123456789 sim
-    """
     if not eh_admin(update.effective_user.id):
         await update.message.reply_text("⛔ **Acesso negado.** Apenas o administrador pode usar este comando.")
         return
@@ -521,8 +518,10 @@ async def processar_mensagem_email(update: Update, context: ContextTypes.DEFAULT
             )
     else:
         await update.message.reply_text(
-            "❌ **E-mail não autorizado ou digitado incorretamente.**\n\n"
-            "Verifique se você digitou o e-mail **exatamente** como cadastrado (respeitando maiúsculas, minúsculas, pontos e símbolos).",
+            "❌ **E-mail não autorizado ou incorreto.**\n\n"
+            f"🆔 **Seu Telegram ID:** `{user_id}`\n\n"
+            f"Caso seja seu primeiro acesso ou precisa autorizar um novo e-mail, envie o seu **ID (`{user_id}`)** e seu login/e-mail no PV do **ADM JR** para realizar a liberação!\n\n"
+            "⚠️ *Se você já possui cadastro, verifique se digitou o e-mail exatamente igual ao cadastrado (respeitando maiúsculas, minúsculas e pontos).*",
             parse_mode="Markdown"
         )
 
@@ -534,13 +533,9 @@ def main():
     if not TELEGRAM_TOKEN:
         raise ValueError("TOKEN_TELEGRAM não configurado nas variáveis do ambiente.")
 
-    # 1. Inicia o servidor HTTP em segundo plano para o Render liberar o deploy imediatamente
     threading.Thread(target=iniciar_servidor_web, daemon=True).start()
-
-    # 2. Executa a migração do clientes.json para o Supabase
     migrar_json_para_supabase()
 
-    # 3. Inicializa o bot do Telegram
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start_command))
@@ -551,7 +546,7 @@ def main():
     app.add_handler(CommandHandler("vip", vip_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, processar_mensagem_email))
 
-    logger.info("Bot operando com integração Supabase e liberação VIP ativa...")
+    logger.info("Bot operando com orientação de Primeiro Acesso ativada...")
     app.run_polling()
 
 if __name__ == "__main__":
