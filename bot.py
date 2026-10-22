@@ -546,12 +546,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 # ==========================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id).strip()
-    clientes = carregar_json("clientes.json")
-
-    if user_id not in clientes and user_id != str(ADMIN_ID).strip():
-        clientes[user_id] = {"emails_permitidos": {}, "permitir_sensivel": False}
-        salvar_json("clientes.json", clientes)
-
+    # Não salva automaticamente o cliente sem e-mails liberados no banco de dados
     await update.message.reply_text(
         f"👋 <b>Central de Liberação de Códigos</b>\n\n"
         f"🆔 <b>Seu ID do Telegram:</b> <code>{user_id}</code>\n\n"
@@ -566,15 +561,33 @@ async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         user_id_cliente = str(context.args[0]).strip()
         email_cliente_raw = context.args[1].strip().lower()
-        dias = int(context.args[2])
+        arg_terceiro = str(context.args[2]).strip()
+
         liberar_sensivel = False
         if len(context.args) > 3 and context.args[3].lower() in ["vip", "sensivel", "true", "todos", "sim"]:
             liberar_sensivel = True
 
-        clientes = carregar_json("clientes.json")
-        dt_expira = datetime.now() + timedelta(days=dias)
+        hoje = datetime.now().date()
+
+        # Aceita tanto quantidade de dias (ex: 30) quanto data direta (ex: 05-11-2026)
+        if arg_terceiro.isdigit():
+            dias = int(arg_terceiro)
+            dt_expira = hoje + timedelta(days=dias)
+        else:
+            exp_date = converter_para_date(arg_terceiro)
+            if not exp_date:
+                await update.message.reply_text(
+                    "⚠️ <b>Validade inválida!</b> Use número de dias (ex: <code>30</code>) ou data (ex: <code>05-11-2026</code>).",
+                    parse_mode="HTML"
+                )
+                return
+            dt_expira = exp_date
+            dias = (dt_expira - hoje).days
+
         data_validade_banco = dt_expira.strftime("%Y-%m-%d")
         data_validade_exibicao = dt_expira.strftime("%d-%m-%Y")
+
+        clientes = carregar_json("clientes.json")
 
         if user_id_cliente not in clientes:
             clientes[user_id_cliente] = {
@@ -588,6 +601,7 @@ async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if "emails_permitidos" not in clientes[user_id_cliente]:
             clientes[user_id_cliente]["emails_permitidos"] = {}
 
+        # Gravação ESTRITA da grafia exata do e-mail digitado
         clientes[user_id_cliente]["emails_permitidos"][email_cliente_raw] = data_validade_banco
 
         salvar_json("clientes.json", clientes)
@@ -601,9 +615,13 @@ async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"⚠️ <b>Atenção:</b> Apenas a grafia exata (<code>{email_cliente_raw}</code>) terá acesso liberado.",
             parse_mode="HTML"
         )
-    except Exception:
+    except Exception as e:
+        logging.error(f"Erro ao autorizar cliente: {e}")
         await update.message.reply_text(
-            "⚠️ <b>Uso correto:</b> <code>/autorizar ID_CLIENTE EMAIL DIAS [vip]</code>",
+            "⚠️ <b>Uso correto:</b> <code>/autorizar ID_CLIENTE EMAIL DIAS_OU_DATA [vip]</code>\n\n"
+            "Exemplos:\n"
+            "• <code>/autorizar 7219528497 email@gmail.com 30</code>\n"
+            "• <code>/autorizar 7219528497 email@gmail.com 05-11-2026</code>",
             parse_mode="HTML"
         )
 
@@ -737,7 +755,6 @@ async def listar_clientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📋 <b>Nenhum cliente cadastrado no momento.</b>", parse_mode="HTML")
         return
 
-    # Suporte para listar um Telegram ID específico (/listar <telegram_id>)
     if context.args:
         target_id = str(context.args[0]).strip()
         if target_id not in clientes:
@@ -804,7 +821,6 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
         tem_acesso = False
         email_expirado = False
 
-        # Se o ID é VIP (permitir_sensivel = True), libera o acesso para qualquer e-mail digitado
         if dados_cliente.get("permitir_sensivel", False):
             tem_acesso = True
         else:
@@ -889,7 +905,7 @@ def main():
             app.add_handler(CommandHandler("listar", listar_clientes))
             app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receber_mensagem_email))
 
-            print("🤖 Bot iniciado e rodando no Render com suporte total a /vip, /editar, /remover e /listar ID...")
+            print("🤖 Bot iniciado e rodando no Render com suporte flexível a datas e dias no /autorizar...")
             app.run_polling(poll_interval=1.0, timeout=20)
         except Exception as e:
             logging.error(f"Ocorreu uma queda temporária no Bot: {e}. Reconectando em 5 segundos...")
