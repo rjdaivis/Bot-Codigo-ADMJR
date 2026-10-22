@@ -588,7 +588,6 @@ async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if "emails_permitidos" not in clientes[user_id_cliente]:
             clientes[user_id_cliente]["emails_permitidos"] = {}
 
-        # Gravação ESTRITA da grafia exata do e-mail digitado
         clientes[user_id_cliente]["emails_permitidos"][email_cliente_raw] = data_validade_banco
 
         salvar_json("clientes.json", clientes)
@@ -738,6 +737,7 @@ async def listar_clientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📋 <b>Nenhum cliente cadastrado no momento.</b>", parse_mode="HTML")
         return
 
+    # Suporte para listar um Telegram ID específico (/listar <telegram_id>)
     if context.args:
         target_id = str(context.args[0]).strip()
         if target_id not in clientes:
@@ -784,7 +784,6 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
     eh_admin = (user_id == str(ADMIN_ID).strip())
     dados_cliente = clientes.get(user_id, {})
 
-    # Se não for admin, nem cliente cadastrado com e-mails ou VIP, nega o acesso
     if not eh_admin and (not dados_cliente or not dados_cliente.get("emails_permitidos")) and not dados_cliente.get("permitir_sensivel"):
         await update.message.reply_text(
             f"🔒 <b>Acesso Não Liberado!</b>\n\nSeu ID de Usuário: <code>{user_id}</code>\n\nEncaminhe ao Suporte para liberação.",
@@ -805,9 +804,7 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
         tem_acesso = False
         email_expirado = False
 
-        # REGRA ESTRITA DE VALIDAÇÃO:
-        # Se for cliente VIP (permitir_sensivel = True), tem acesso direto a qualquer e-mail.
-        # Se for cliente Comum, exige igualdade exata de caracteres entre email_original e a chave autorizada 'k'.
+        # Se o ID é VIP (permitir_sensivel = True), libera o acesso para qualquer e-mail digitado
         if dados_cliente.get("permitir_sensivel", False):
             tem_acesso = True
         else:
@@ -833,7 +830,6 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
                 )
             return
 
-    # Mapeamento do e-mail validado para a conta no contas.json
     email_base = normalizar_email_gmail(email_original)
     contas = carregar_json("contas.json")
     conta_encontrada = None
@@ -893,7 +889,7 @@ def main():
             app.add_handler(CommandHandler("listar", listar_clientes))
             app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receber_mensagem_email))
 
-            print("🤖 Bot iniciado e rodando no Render com todas as regras e validações estritas preservadas...")
+            print("🤖 Bot iniciado e rodando no Render com suporte total a /vip, /editar, /remover e /listar ID...")
             app.run_polling(poll_interval=1.0, timeout=20)
         except Exception as e:
             logging.error(f"Ocorreu uma queda temporária no Bot: {e}. Reconectando em 5 segundos...")
