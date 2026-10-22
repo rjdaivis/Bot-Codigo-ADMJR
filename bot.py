@@ -38,6 +38,16 @@ if not TELEGRAM_TOKEN or not SUPABASE_URL or not SUPABASE_KEY:
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ==========================================
+# FUNÇÕES AUXILIARES DE SEGURANÇA
+# ==========================================
+
+def eh_admin(user_id: int or str) -> bool:
+    """Verifica se o usuário que executou o comando é o Administrador do bot."""
+    if not ADMIN_ID:
+        return True  # Se ADMIN_ID não foi definido, permite para evitar bloqueio acidental
+    return str(user_id) == str(ADMIN_ID)
+
+# ==========================================
 # BANCO DE DADOS (SUPABASE) & MIGRAÇÃO
 # ==========================================
 
@@ -51,6 +61,15 @@ def obter_cliente(telegram_id: str) -> dict:
     except Exception as e:
         logger.error(f"Erro ao obter cliente {telegram_id}: {e}")
         return {}
+
+def obter_todos_clientes() -> list:
+    """Busca todos os clientes cadastrados no Supabase."""
+    try:
+        response = supabase.table("clientes_bot").select("*").execute()
+        return response.data or []
+    except Exception as e:
+        logger.error(f"Erro ao obter todos os clientes: {e}")
+        return []
 
 def salvar_cliente(telegram_id: str, emails_dict: dict, permitir_sensivel: bool = False):
     """Salva ou atualiza os e-mails do cliente no Supabase."""
@@ -67,29 +86,31 @@ def salvar_cliente(telegram_id: str, emails_dict: dict, permitir_sensivel: bool 
         logger.error(f"Erro ao salvar cliente {telegram_id}: {e}")
 
 def migrar_json_para_supabase():
-    """Lê o arquivo clientes.json do GitHub e importa tudo automaticamente para o Supabase."""
+    """Lê o arquivo clientes.json do GitHub e importa tudo automaticamente para o Supabase se ainda não existir."""
     caminho_json = "clientes.json"
     if os.path.exists(caminho_json):
         try:
             with open(caminho_json, "r", encoding="utf-8") as f:
                 dados = json.load(f)
             
-            logger.info("Iniciando migração do clientes.json para o Supabase...")
+            logger.info("Verificando migração do clientes.json para o Supabase...")
             for telegram_id, info in dados.items():
-                if isinstance(info, dict):
-                    emails = info.get("emails", {})
-                    if isinstance(emails, list):
-                        emails = {e: None for e in emails}
-                    permitir = info.get("permitir_sensivel", False)
-                elif isinstance(info, list):
-                    emails = {e: None for e in info}
-                    permitir = False
-                else:
-                    continue
+                cliente_existente = obter_cliente(str(telegram_id))
+                if not cliente_existente:
+                    if isinstance(info, dict):
+                        emails = info.get("emails", {})
+                        if isinstance(emails, list):
+                            emails = {e: None for e in emails}
+                        permitir = info.get("permitir_sensivel", False)
+                    elif isinstance(info, list):
+                        emails = {e: None for e in info}
+                        permitir = False
+                    else:
+                        continue
 
-                salvar_cliente(str(telegram_id), emails, permitir)
+                    salvar_cliente(str(telegram_id), emails, permitir)
 
-            logger.info("✅ Migração do clientes.json concluída com sucesso no Supabase!")
+            logger.info("✅ Checagem/Migração do clientes.json concluída!")
         except Exception as e:
             logger.error(f"Erro na migração do clientes.json: {e}")
 
@@ -271,17 +292,95 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def autorizar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Comando administrativo para autorizar cliente (RESTRITO AO ADMINISTRADOR).
-    Uso: /autorizar <telegram_id> <email>
+    Autoriza um e-mail para um ID do Telegram.
+    Uso: /autorizar <telegram_id> <email> [AAAA-MM-DD]
     """
-    user_id = str(update.effective_user.id)
-    
-    if ADMIN_ID and user_id != str(ADMIN_ID):
-        await update.message.reply_text("⛔ **Acesso negado.** Apenas o administrador pode cadastrar autorizações.")
+    if not eh_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ **Acesso negado.** Apenas o administrador pode usar este comando.")
         return
 
     if len(context.args) < 2:
-        await update.message.reply_text("Uso correto: `/autorizar <telegram_id> <email>`", parse_mode="Markdown")
+        await update.message.reply_text("Uso correto: `/autorizar <telegram_id> <email> [AAAA-MM-DD]`", parse_mode="Markdown")
+        return
+
+    target_id = context.args[0]
+    target_email = context.args[1]
+    data_expira = context.args[2] if len(context.args) >= 3 else None
+
+    # Formata data de expiração se fornecida
+    exp_iso = None
+    if data_expira:
+        try:
+            exp_iso = datetime.strptime(data_expira, "%Y-%m-%d").isoformat()
+        except ValueError:
+            await update.message.reply_text("⚠️ Formato de data inválido! Use `AAAA-MM-DD` (ex: 2026-12-31).")
+            return
+
+    cliente = obter_cliente(target_id)
+    emails_dict = cliente.get("emails_permitidos", {})
+    emails_dict[target_email] = exp_iso
+
+    salvar_cliente(target_id, emails_dict, cliente.get("permitir_sensivel", False))
+    
+    msg_data = f" (Expira em: `{data_expira}`)" if data_expira else " (Acesso vitalício/sem data)"
+    await update.message.reply_text(
+        f"✅ E-mail `{target_email}` cadastrado para o ID `{target_id}`{msg_data}!",
+        parse_mode="Markdown"
+    )
+
+async def editar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Edita a data de expiração de um e-mail cadastrado.
+    Uso: /editar <telegram_id> <email> <AAAA-MM-DD ou sem_data>
+    """
+    if not eh_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ **Acesso negado.** Apenas o administrador pode usar este comando.")
+        return
+
+    if len(context.args) < 3:
+        await update.message.reply_text("Uso correto: `/editar <telegram_id> <email> <AAAA-MM-DD ou sem_data>`", parse_mode="Markdown")
+        return
+
+    target_id = context.args[0]
+    target_email = context.args[1]
+    nova_opcao = context.args[2].lower()
+
+    cliente = obter_cliente(target_id)
+    emails_dict = cliente.get("emails_permitidos", {})
+
+    if target_email not in emails_dict:
+        await update.message.reply_text(f"❌ O e-mail `{target_email}` não foi encontrado no cadastro do ID `{target_id}`.", parse_mode="Markdown")
+        return
+
+    if nova_opcao in ["sem_data", "semdata", "none", "ilimitado", "0"]:
+        emails_dict[target_email] = None
+        msg_exp = "Removida a data (Acesso ilimitado)"
+    else:
+        try:
+            exp_iso = datetime.strptime(nova_opcao, "%Y-%m-%d").isoformat()
+            emails_dict[target_email] = exp_iso
+            msg_exp = f"Nova data definida para `{nova_opcao}`"
+        except ValueError:
+            await update.message.reply_text("⚠️ Formato de data inválido! Use `AAAA-MM-DD` ou `sem_data`.")
+            return
+
+    salvar_cliente(target_id, emails_dict, cliente.get("permitir_sensivel", False))
+    await update.message.reply_text(
+        f"✏️ **Atualizado!** E-mail `{target_email}` do ID `{target_id}`: {msg_exp}.",
+        parse_mode="Markdown"
+    )
+
+async def remover_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Remove um e-mail autorizador de um Telegram ID.
+    Uso: /remover <telegram_id> <email>
+    """
+    if not eh_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ **Acesso negado.** Apenas o administrador pode usar este comando.")
+        return
+
+    if len(context.args) < 2:
+        await update.message.reply_text("Uso correto: `/remover <telegram_id> <email>`", parse_mode="Markdown")
         return
 
     target_id = context.args[0]
@@ -289,14 +388,97 @@ async def autorizar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     cliente = obter_cliente(target_id)
     emails_dict = cliente.get("emails_permitidos", {})
+
+    if target_email in emails_dict:
+        del emails_dict[target_email]
+        salvar_cliente(target_id, emails_dict, cliente.get("permitir_sensivel", False))
+        await update.message.reply_text(f"🗑️ E-mail `{target_email}` **removido com sucesso** do ID `{target_id}`!", parse_mode="Markdown")
+    else:
+        await update.message.reply_text(f"❌ O e-mail `{target_email}` não estava cadastrado para o ID `{target_id}`.", parse_mode="Markdown")
+
+async def listar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Lista todos os clientes e seus e-mails autorizados, ou consulta um ID específico.
+    Uso: /listar [telegram_id]
+    """
+    if not eh_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ **Acesso negado.** Apenas o administrador pode usar este comando.")
+        return
+
+    # Se informou um ID específico
+    if len(context.args) >= 1:
+        target_id = context.args[0]
+        cliente = obter_cliente(target_id)
+        if not cliente:
+            await update.message.reply_text(f"❌ Nenhum registro encontrado para o Telegram ID `{target_id}`.", parse_mode="Markdown")
+            return
+
+        emails = cliente.get("emails_permitidos", {})
+        vip = "Sim ⭐️" if cliente.get("permitir_sensivel") else "Não"
+        
+        texto = f"📋 **Cadastro do ID `{target_id}`** (VIP: {vip}):\n\n"
+        if not emails:
+            texto += "Nenhum e-mail autorizado."
+        else:
+            for em, exp in emails.items():
+                data_str = exp.split("T")[0] if exp else "Sem expiração"
+                texto += f"• `{em}` — Expira: *{data_str}*\n"
+
+        await update.message.reply_text(texto, parse_mode="Markdown")
+        return
+
+    # Se não informou ID, lista todos os cadastrados no Supabase
+    todos = obter_todos_clientes()
+    if not todos:
+        await update.message.reply_text("📂 Nenhum cliente cadastrado na base de dados.")
+        return
+
+    texto = f"📋 **Lista de Clientes Cadastrados ({len(todos)}):**\n\n"
+    for c in todos:
+        t_id = c.get("telegram_id")
+        emails = c.get("emails_permitidos", {})
+        vip = "⭐️ VIP" if c.get("permitir_sensivel") else ""
+        
+        texto += f"👤 **ID:** `{t_id}` {vip}\n"
+        if isinstance(emails, dict) and emails:
+            for em, exp in emails.items():
+                d_str = exp.split("T")[0] if exp else "Sem expiração"
+                texto += f"   └── `{em}` ({d_str})\n"
+        else:
+            texto += "   └── *Sem e-mails*\n"
+        texto += "\n"
+
+    # Caso a mensagem seja muito longa para o Telegram, divide em partes
+    if len(texto) > 4000:
+        for x in range(0, len(texto), 4000):
+            await update.message.reply_text(texto[x:x+4000], parse_mode="Markdown")
+    else:
+        await update.message.reply_text(texto, parse_mode="Markdown")
+
+async def vip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Define o status VIP (permissão sensível) de um cliente.
+    Uso: /vip <telegram_id> <sim ou nao>
+    """
+    if not eh_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ **Acesso negado.** Apenas o administrador pode usar este comando.")
+        return
+
+    if len(context.args) < 2:
+        await update.message.reply_text("Uso correto: `/vip <telegram_id> <sim ou nao>`", parse_mode="Markdown")
+        return
+
+    target_id = context.args[0]
+    opcao = context.args[1].lower()
+    status_vip = opcao in ["sim", "s", "true", "1", "on"]
+
+    cliente = obter_cliente(target_id)
+    emails_dict = cliente.get("emails_permitidos", {})
+
+    salvar_cliente(target_id, emails_dict, permitir_sensivel=status_vip)
     
-    emails_dict[target_email] = None
-    
-    salvar_cliente(target_id, emails_dict, cliente.get("permitir_sensivel", False))
-    await update.message.reply_text(
-        f"✅ E-mail `{target_email}` registrado com sucesso para o Telegram ID `{target_id}` no Supabase!",
-        parse_mode="Markdown"
-    )
+    txt_status = "ATIVADO ⭐️" if status_vip else "DESATIVADO"
+    await update.message.reply_text(f"👑 Status VIP do ID `{target_id}` foi **{txt_status}**!", parse_mode="Markdown")
 
 async def processar_mensagem_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Processa o e-mail enviado pelo usuário e realiza a busca de acessos."""
@@ -341,12 +523,18 @@ def main():
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-    # Registra os Handlers
+    # Registra os Handlers de Comandos
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("autorizar", autorizar_command))
+    app.add_handler(CommandHandler("editar", editar_command))
+    app.add_handler(CommandHandler("remover", remover_command))
+    app.add_handler(CommandHandler("listar", listar_command))
+    app.add_handler(CommandHandler("vip", vip_command))
+
+    # Handler para mensagens de texto (Validação e Busca de E-mails)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, processar_mensagem_email))
 
-    logger.info("Bot operando com integração Supabase e contas ativas do contas.json...")
+    logger.info("Bot operando com integração Supabase e todos os comandos ativos...")
     app.run_polling()
 
 if __name__ == "__main__":
