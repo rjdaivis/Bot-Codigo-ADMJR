@@ -607,6 +607,98 @@ async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML"
         )
 
+async def vip_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /vip <telegram_id> sim/nao para liberar busca ilimitada de e-mails."""
+    if str(update.effective_user.id).strip() != str(ADMIN_ID).strip():
+        return
+
+    if len(context.args) < 2:
+        await update.message.reply_text("⚠️ <b>Uso correto:</b> <code>/vip ID_CLIENTE sim/nao</code>", parse_mode="HTML")
+        return
+
+    target_id = str(context.args[0]).strip()
+    opcao = str(context.args[1]).strip().lower()
+    status_vip = opcao in ["sim", "s", "true", "1", "vip", "on"]
+
+    clientes = carregar_json("clientes.json")
+    if target_id not in clientes:
+        clientes[target_id] = {"emails_permitidos": {}, "permitir_sensivel": status_vip}
+    else:
+        clientes[target_id]["permitir_sensivel"] = status_vip
+
+    salvar_json("clientes.json", clientes)
+
+    txt_status = "ATIVADO ⭐️\nEste Telegram ID agora possui **busca ilimitada** para qualquer e-mail digitado!" if status_vip else "DESATIVADO\nEste Telegram ID voltou a depender de e-mails específicos autorizados."
+    await update.message.reply_text(
+        f"👑 <b>Status VIP do ID <code>{target_id}</code>:</b> {txt_status}",
+        parse_mode="HTML"
+    )
+
+async def editar_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /editar <telegram_id> <email> <nova_data_DD-MM-AAAA ou sem_data>."""
+    if str(update.effective_user.id).strip() != str(ADMIN_ID).strip():
+        return
+
+    if len(context.args) < 3:
+        await update.message.reply_text(
+            "⚠️ <b>Uso correto:</b> <code>/editar ID_CLIENTE EMAIL DD-MM-AAAA</code> ou <code>/editar ID_CLIENTE EMAIL sem_data</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    target_id = str(context.args[0]).strip()
+    target_email = str(context.args[1]).strip().lower()
+    nova_opcao = str(context.args[2]).strip().lower()
+
+    clientes = carregar_json("clientes.json")
+    if target_id not in clientes or target_email not in clientes[target_id].get("emails_permitidos", {}):
+        await update.message.reply_text(f"❌ O e-mail <code>{target_email}</code> não está cadastrado para o ID <code>{target_id}</code>.", parse_mode="HTML")
+        return
+
+    if nova_opcao in ["sem_data", "semdata", "none", "ilimitado", "0"]:
+        clientes[target_id]["emails_permitidos"][target_email] = "2030-12-31"
+        data_exib = "Sem expiração (Ilimitado)"
+    else:
+        exp_date = converter_para_date(nova_opcao)
+        if not exp_date:
+            await update.message.reply_text("⚠️ Data inválida! Use o formato <b>DD-MM-AAAA</b>.", parse_mode="HTML")
+            return
+        data_salvar = exp_date.strftime("%Y-%m-%d")
+        data_exib = exp_date.strftime("%d-%m-%Y")
+        clientes[target_id]["emails_permitidos"][target_email] = data_salvar
+
+    salvar_json("clientes.json", clientes)
+    await update.message.reply_text(
+        f"✏️ <b>Data atualizada com sucesso!</b>\n\n👤 <b>ID:</b> <code>{target_id}</code>\n📧 <b>E-mail:</b> <code>{target_email}</code>\n📅 <b>Nova Validade:</b> {data_exib}",
+        parse_mode="HTML"
+    )
+
+async def remover_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /remover <telegram_id> <email>."""
+    if str(update.effective_user.id).strip() != str(ADMIN_ID).strip():
+        return
+
+    if len(context.args) < 2:
+        await update.message.reply_text("⚠️ <b>Uso correto:</b> <code>/remover ID_CLIENTE EMAIL</code>", parse_mode="HTML")
+        return
+
+    target_id = str(context.args[0]).strip()
+    target_email = str(context.args[1]).strip().lower()
+
+    clientes = carregar_json("clientes.json")
+    if target_id in clientes and target_email in clientes[target_id].get("emails_permitidos", {}):
+        del clientes[target_id]["emails_permitidos"][target_email]
+        salvar_json("clientes.json", clientes)
+        await update.message.reply_text(
+            f"🗑️ E-mail <code>{target_email}</code> <b>removido com sucesso</b> do ID <code>{target_id}</code>!",
+            parse_mode="HTML"
+        )
+    else:
+        await update.message.reply_text(
+            f"❌ O e-mail <code>{target_email}</code> não foi localizado no cadastro do ID <code>{target_id}</code>.",
+            parse_mode="HTML"
+        )
+
 async def limpar_nao_vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_user.id).strip() != str(ADMIN_ID).strip():
         return
@@ -645,12 +737,22 @@ async def listar_clientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📋 <b>Nenhum cliente cadastrado no momento.</b>", parse_mode="HTML")
         return
 
+    # Suporte para listar um Telegram ID específico (/listar <telegram_id>)
+    if context.args:
+        target_id = str(context.args[0]).strip()
+        if target_id not in clientes:
+            await update.message.reply_text(f"❌ Nenhum registro encontrado para o ID <code>{target_id}</code>.", parse_mode="HTML")
+            return
+        lista_filtrada = {target_id: clientes[target_id]}
+    else:
+        lista_filtrada = clientes
+
     hoje = datetime.now().date()
     mensagem = "📋 <b>Lista de Clientes Liberados:</b>\n\n"
 
-    for id_cliente, dados in clientes.items():
+    for id_cliente, dados in lista_filtrada.items():
         emails = dados.get("emails_permitidos", {})
-        vip = "Sim" if dados.get("permitir_sensivel") else "Não"
+        vip = "Sim ⭐️" if dados.get("permitir_sensivel") else "Não"
         mensagem += f"👤 <b>ID:</b> <code>{id_cliente}</code> | <b>VIP:</b> {vip}\n"
         if not emails:
             mensagem += " └ ⚠️ Nenhum e-mail liberado.\n"
@@ -682,7 +784,7 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
     eh_admin = (user_id == str(ADMIN_ID).strip())
     dados_cliente = clientes.get(user_id, {})
 
-    if not eh_admin and (not dados_cliente or not dados_cliente.get("emails_permitidos")):
+    if not eh_admin and (not dados_cliente or not dados_cliente.get("emails_permitidos")) and not dados_cliente.get("permitir_sensivel"):
         await update.message.reply_text(
             f"🔒 <b>Acesso Não Liberado!</b>\n\nSeu ID de Usuário: <code>{user_id}</code>\n\nEncaminhe ao Suporte para liberação.",
             parse_mode="HTML"
@@ -702,14 +804,18 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
         tem_acesso = False
         email_expirado = False
 
-        for k, data_exp in emails_permitidos.items():
-            if k == "*" or email_original == k.lower():
-                exp_date = converter_para_date(data_exp)
-                if exp_date and exp_date >= hoje:
-                    tem_acesso = True
-                    break
-                else:
-                    email_expirado = True
+        # Se o ID é VIP (permitir_sensivel = True), libera o acesso para qualquer e-mail digitado
+        if dados_cliente.get("permitir_sensivel", False):
+            tem_acesso = True
+        else:
+            for k, data_exp in emails_permitidos.items():
+                if k == "*" or email_original == k.lower():
+                    exp_date = converter_para_date(data_exp)
+                    if exp_date and exp_date >= hoje:
+                        tem_acesso = True
+                        break
+                    else:
+                        email_expirado = True
 
         if not tem_acesso:
             if email_expirado:
@@ -775,12 +881,15 @@ def main():
 
             app.add_handler(CommandHandler("start", start))
             app.add_handler(CommandHandler("autorizar", autorizar_cliente))
+            app.add_handler(CommandHandler("editar", editar_comando))
+            app.add_handler(CommandHandler("remover", remover_comando))
+            app.add_handler(CommandHandler("vip", vip_comando))
             app.add_handler(CommandHandler("limpar", limpar_nao_vip))
             app.add_handler(CommandHandler("limpar_nao_vip", limpar_nao_vip))
             app.add_handler(CommandHandler("listar", listar_clientes))
             app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receber_mensagem_email))
 
-            print("🤖 Bot iniciado e rodando no Render com exibição em DD-MM-AAAA...")
+            print("🤖 Bot iniciado e rodando no Render com suporte total a /vip, /editar, /remover e /listar ID...")
             app.run_polling(poll_interval=1.0, timeout=20)
         except Exception as e:
             logging.error(f"Ocorreu uma queda temporária no Bot: {e}. Reconectando em 5 segundos...")
