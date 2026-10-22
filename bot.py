@@ -3,6 +3,7 @@ import re
 import json
 import imaplib
 import email
+import html
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from email.header import decode_header
@@ -74,7 +75,7 @@ def iniciar_servidor_web():
 # ==========================================
 
 def eh_admin(user_id) -> bool:
-    """Verifica se o usuário que executou a ação é o Administrador do bot."""
+    """Verifica se o utilizador que executou a ação é o Administrador do bot."""
     if not ADMIN_ID:
         return False
     return str(user_id) == str(ADMIN_ID)
@@ -253,6 +254,19 @@ def carregar_contas_email() -> list:
         logger.error(f"Erro ao ler contas.json: {e}")
         return []
 
+def decodificar_texto_cabecalho(valor_cabecalho: str) -> str:
+    """Decodifica cabeçalhos completos de e-mail (Assunto/From) sem truncar partes UTF-8."""
+    if not valor_cabecalho:
+        return ""
+    partes = decode_header(valor_cabecalho)
+    resultado = ""
+    for conteudo, enc in partes:
+        if isinstance(conteudo, bytes):
+            resultado += conteudo.decode(enc or "utf-8", errors="ignore")
+        elif isinstance(conteudo, str):
+            resultado += conteudo
+    return resultado
+
 def extrair_corpo_email(msg) -> str:
     """Extrai o texto/HTML completo de uma mensagem de e-mail."""
     corpo = ""
@@ -270,10 +284,28 @@ def extrair_corpo_email(msg) -> str:
             corpo = payload.decode("utf-8", errors="ignore")
     return corpo
 
+def extrair_codigo_disney(texto: str) -> str:
+    """Extrai o código numérico de 6 dígitos da Disney+ mesmo dentro de HTML ou com espaços."""
+    texto_limpo = html.unescape(re.sub(r'<[^>]+>', ' ', texto))
+    
+    padrao = r'\b(?:\d[\s\xa0-]*){6}\b'
+    encontrados = re.findall(padrao, texto_limpo)
+    
+    for item in encontrados:
+        digitos = re.sub(r'\D', '', item)
+        if len(digitos) == 6:
+            return digitos
+            
+    digitos_diretos = re.findall(r'\b\d{6}\b', texto_limpo)
+    if digitos_diretos:
+        return digitos_diretos[0]
+        
+    return None
+
 def buscar_codigos_streaming(email_destino: str) -> list:
     """
-    Varre as caixas de entrada definidas em contas.json procurando e-mails
-    destinados ao email_destino e extraindo códigos e links.
+    Varre as caixas de entrada do contas.json decodificando assuntos completos
+    e extraindo códigos/links de streamings.
     """
     contas = carregar_contas_email()
     if not contas:
@@ -281,14 +313,31 @@ def buscar_codigos_streaming(email_destino: str) -> list:
 
     resultados = []
 
-    # Prepara variações com e sem pontos para o IMAP encontrar o e-mail no servidor
-    partes = email_destino.split("@")
-    user_orig = partes[0]
-    domain_orig = partes[1] if len(partes) > 1 else "gmail.com"
-    user_sem_pontos = user_orig.replace(".", "")
-    email_sem_pontos = f"{user_sem_pontos}@{domain_orig}"
+    # Prepara versão sem pontos do e-mail digitado
+    partes_cli = email_destino.split("@")
+    user_cli = partes_cli[0].replace(".", "").lower()
+    domain_cli = partes_cli[1].lower() if len(partes_cli) > 1 else "gmail.com"
+    email_cli_sem_pontos = f"{user_cli}@{domain_cli}"
 
-    for conta in contas:
+    # Ordena para aceder primeiro à conta correspondente
+    contas_priorizadas = []
+    outras_contas = []
+
+    for c in contas:
+        u = c.get("user", "")
+        u_partes = u.split("@")
+        u_user = u_partes[0].replace(".", "").lower()
+        u_domain = u_partes[1].lower() if len(u_partes) > 1 else "gmail.com"
+        u_sem_pontos = f"{u_user}@{u_domain}"
+
+        if u_sem_pontos == email_cli_sem_pontos:
+            contas_priorizadas.insert(0, c)
+        else:
+            outras_contas.append(c)
+
+    lista_contas = contas_priorizadas + outras_contas
+
+    for conta in lista_contas:
         imap_user = conta.get("user", "")
         imap_pass = conta.get("pass", "")
         imap_server = conta.get("server", "imap.gmail.com")
@@ -301,23 +350,13 @@ def buscar_codigos_streaming(email_destino: str) -> list:
             mail.login(imap_user, imap_pass)
             mail.select("inbox")
 
-            # 1. Tenta buscar por TO com e-mail digitado
-            status, messages = mail.search(None, f'(TO "{email_destino}")')
-            
-            # 2. Se não encontrar, tenta buscar por TO sem pontos
-            if status != "OK" or not messages[0]:
-                status, messages = mail.search(None, f'(TO "{email_sem_pontos}")')
-
-            # 3. Se ainda não encontrar, pega todas as mensagens recentes da caixa
-            if status != "OK" or not messages[0]:
-                status, messages = mail.search(None, 'ALL')
-
-            if not messages[0]:
+            status, messages = mail.search(None, 'ALL')
+            if status != "OK" or not messages or not messages[0]:
                 mail.logout()
                 continue
 
             id_list = messages[0].split()
-            ultimos_ids = id_list[-10:]  # Varre os últimos 10 e-mails recentes da caixa
+            ultimos_ids = id_list[-15:]
 
             for msg_id in reversed(ultimos_ids):
                 res, msg_data = mail.fetch(msg_id, "(RFC822)")
@@ -327,22 +366,22 @@ def buscar_codigos_streaming(email_destino: str) -> list:
                 for response_part in msg_data:
                     if isinstance(response_part, tuple):
                         msg = email.message_from_bytes(response_part[1])
-                        assunto, encoding = decode_header(msg.get("Subject", ""))[0]
-                        if isinstance(assunto, bytes):
-                            assunto = assunto.decode(encoding or "utf-8", errors="ignore")
+                        
+                        assunto = decodificar_texto_cabecalho(msg.get("Subject", "")).lower()
+                        remetente = decodificar_texto_cabecalho(msg.get("From", "")).lower()
                         
                         corpo = extrair_corpo_email(msg)
 
-                        # 1. DISNEY+ (Código numérico de 6 dígitos)
-                        if "disney" in msg.get("From", "").lower() or "disney" in assunto.lower():
-                            codigos_disney = re.findall(r'\b\d{6}\b', corpo)
-                            if codigos_disney:
-                                item_res = f"✨ **Disney+**: Seu código de acesso é **{codigos_disney[0]}**"
+                        # 1. DISNEY+
+                        if "disney" in remetente or "disney" in assunto:
+                            codigo = extrair_codigo_disney(corpo)
+                            if codigo:
+                                item_res = f"✨ **Disney+**: Seu código de acesso é **{codigo}**"
                                 if item_res not in resultados:
                                     resultados.append(item_res)
 
                         # 2. NETFLIX
-                        elif "netflix" in msg.get("From", "").lower() or "netflix" in assunto.lower():
+                        elif "netflix" in remetente or "netflix" in assunto:
                             links_netflix = re.findall(r'https?://[^\s<>"]+netflix\.com[^\s<>"]+', corpo)
                             codigos_netflix = re.findall(r'\b\d{4,8}\b', corpo)
 
@@ -356,7 +395,7 @@ def buscar_codigos_streaming(email_destino: str) -> list:
                                     resultados.append(item_res)
 
                         # 3. HBO MAX / MAX
-                        elif "hbo" in msg.get("From", "").lower() or "max" in msg.get("From", "").lower() or "max" in assunto.lower():
+                        elif "hbo" in remetente or "max" in remetente or "max" in assunto:
                             links_hbo = re.findall(r'https?://[^\s<>"]+(?:max|hbomax)\.com[^\s<>"]+', corpo)
                             if links_hbo:
                                 item_res = f"🟣 **HBO Max / MAX**: [Clique aqui para acessar/redefinir]({links_hbo[0]})"
@@ -364,7 +403,7 @@ def buscar_codigos_streaming(email_destino: str) -> list:
                                     resultados.append(item_res)
 
                         # 4. GLOBO / GLOBOPLAY
-                        elif "globo" in msg.get("From", "").lower() or "globo" in assunto.lower():
+                        elif "globo" in remetente or "globo" in assunto:
                             links_globo = re.findall(r'https?://[^\s<>"]+globo\.com[^\s<>"]+', corpo)
                             if links_globo:
                                 item_res = f"🔵 **Globo / Globoplay**: [Clique aqui para acessar/redefinir]({links_globo[0]})"
@@ -372,6 +411,10 @@ def buscar_codigos_streaming(email_destino: str) -> list:
                                     resultados.append(item_res)
 
             mail.logout()
+            
+            if resultados and conta in contas_priorizadas:
+                break
+
         except Exception as e:
             logger.error(f"Erro ao consultar conta {imap_user}: {e}")
 
@@ -683,7 +726,7 @@ def main():
     app.add_handler(CommandHandler("vip", vip_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, processar_mensagem_email))
 
-    logger.info("Bot operando com motor de busca IMAP atualizado para alias de pontos...")
+    logger.info("Bot operando com extrator HTML de códigos da Disney e decodificação avançada de assuntos...")
     app.run_polling()
 
 if __name__ == "__main__":
