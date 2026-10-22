@@ -61,6 +61,29 @@ CLIENTES_FIXOS_PADRAO = {
 }
 
 # ==========================================
+# FUNÇÕES AUXILIARES DE TRATAMENTO DE DATAS
+# ==========================================
+def converter_para_date(data_str: str):
+    """Converte qualquer string de data (ISO, YYYY-MM-DD, DD-MM-YYYY) para um objeto date."""
+    if not data_str:
+        return None
+    data_limpa = str(data_str).split("T")[0].strip()
+    formatos = ["%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y"]
+    for fmt in formatos:
+        try:
+            return datetime.strptime(data_limpa, fmt).date()
+        except ValueError:
+            pass
+    return None
+
+def formatar_data_exibicao_br(data_str: str) -> str:
+    """Converte a data para o formato visual DD-MM-AAAA."""
+    dt_obj = converter_para_date(data_str)
+    if dt_obj:
+        return dt_obj.strftime("%d-%m-%Y")
+    return str(data_str)
+
+# ==========================================
 # SERVIDOR FLASK (HEALTH CHECK DO RENDER)
 # ==========================================
 app_flask = Flask('')
@@ -549,7 +572,9 @@ async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
             liberar_sensivel = True
 
         clientes = carregar_json("clientes.json")
-        data_validade = (datetime.now() + timedelta(days=dias)).strftime("%Y-%m-%d")
+        dt_expira = datetime.now() + timedelta(days=dias)
+        data_validade_banco = dt_expira.strftime("%Y-%m-%d")
+        data_validade_exibicao = dt_expira.strftime("%d-%m-%Y")
 
         if user_id_cliente not in clientes:
             clientes[user_id_cliente] = {
@@ -563,7 +588,7 @@ async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if "emails_permitidos" not in clientes[user_id_cliente]:
             clientes[user_id_cliente]["emails_permitidos"] = {}
 
-        clientes[user_id_cliente]["emails_permitidos"][email_cliente_raw] = data_validade
+        clientes[user_id_cliente]["emails_permitidos"][email_cliente_raw] = data_validade_banco
 
         salvar_json("clientes.json", clientes)
 
@@ -572,7 +597,7 @@ async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"✅ <b>Acesso Concedido com Sucesso!</b>\n\n"
             f"👤 <b>ID Cliente:</b> <code>{user_id_cliente}</code>\n"
             f"📧 <b>E-mail Liberado:</b> <code>{email_cliente_raw}</code>\n"
-            f"📅 <b>Válido até:</b> {data_validade} ({dias} dias){msg_vip}\n\n"
+            f"📅 <b>Válido até:</b> {data_validade_exibicao} ({dias} dias){msg_vip}\n\n"
             f"⚠️ <b>Atenção:</b> Apenas a grafia exata (<code>{email_cliente_raw}</code>) terá acesso liberado.",
             parse_mode="HTML"
         )
@@ -587,15 +612,17 @@ async def limpar_nao_vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     clientes = carregar_json("clientes.json")
-    hoje_str = datetime.now().strftime("%Y-%m-%d")
+    hoje = datetime.now().date()
     emails_removidos = 0
 
     for user_id, dados in list(clientes.items()):
         emails = dados.get("emails_permitidos", {})
         para_remover = []
         for email_end, data_exp in emails.items():
-            if email_end != "*" and data_exp < hoje_str:
-                para_remover.append(email_end)
+            if email_end != "*":
+                exp_date = converter_para_date(data_exp)
+                if exp_date and exp_date < hoje:
+                    para_remover.append(email_end)
         for email_vencido in para_remover:
             del dados["emails_permitidos"][email_vencido]
             emails_removidos += 1
@@ -629,14 +656,16 @@ async def listar_clientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
             mensagem += " └ ⚠️ Nenhum e-mail liberado.\n"
         else:
             for email_end, data_exp in emails.items():
-                try:
-                    exp_date = datetime.strptime(data_exp, "%Y-%m-%d").date()
+                exp_date = converter_para_date(data_exp)
+                if exp_date:
                     dias_restantes = (exp_date - hoje).days
                     status_dias = "🛑 <i>Expirado</i>" if dias_restantes < 0 else f"⏳ <i>Faltam {dias_restantes} dia(s)</i>"
-                except Exception:
+                    data_exibicao = exp_date.strftime("%d-%m-%Y")
+                else:
                     status_dias = "❓ Data inválida"
+                    data_exibicao = str(data_exp)
 
-                mensagem += f" └ 📧 <code>{email_end}</code>\n 📅 Validade: {data_exp} ({status_dias})\n"
+                mensagem += f" └ 📧 <code>{email_end}</code>\n 📅 Validade: {data_exibicao} ({status_dias})\n"
         mensagem += "\n"
 
     if len(mensagem) > 4000:
@@ -668,14 +697,15 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
 
     if not eh_admin:
         emails_permitidos = dados_cliente.get("emails_permitidos", {})
-        hoje_str = datetime.now().strftime("%Y-%m-%d")
+        hoje = datetime.now().date()
 
         tem_acesso = False
         email_expirado = False
 
         for k, data_exp in emails_permitidos.items():
             if k == "*" or email_original == k.lower():
-                if data_exp >= hoje_str:
+                exp_date = converter_para_date(data_exp)
+                if exp_date and exp_date >= hoje:
                     tem_acesso = True
                     break
                 else:
@@ -750,7 +780,7 @@ def main():
             app.add_handler(CommandHandler("listar", listar_clientes))
             app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receber_mensagem_email))
 
-            print("🤖 Bot iniciado e rodando no Render...")
+            print("🤖 Bot iniciado e rodando no Render com exibição em DD-MM-AAAA...")
             app.run_polling(poll_interval=1.0, timeout=20)
         except Exception as e:
             logging.error(f"Ocorreu uma queda temporária no Bot: {e}. Reconectando em 5 segundos...")
