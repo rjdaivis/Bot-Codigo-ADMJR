@@ -65,9 +65,9 @@ def iniciar_servidor_web():
 # ==========================================
 
 def eh_admin(user_id) -> bool:
-    """Verifica se o utilizador que executou o comando é o Administrador do bot."""
+    """Verifica se o usuário que executou a ação é o Administrador do bot."""
     if not ADMIN_ID:
-        return True
+        return False
     return str(user_id) == str(ADMIN_ID)
 
 # ==========================================
@@ -139,11 +139,20 @@ def migrar_json_para_supabase():
 
 def validar_email_estrito(telegram_id: str, email_informado: str) -> bool:
     """
-    REGRA ESTRITA: Valida o e-mail comparando exatamente a string informada
-    contra as autorizações gravadas no Supabase. Mantém maiúsculas, minúsculas,
-    pontos e símbolos sem aplicar qualquer normalização.
+    REGRA DE VALIDAÇÃO DE ACESSO:
+    1. Administrador (ADMIN_ID): Acesso ilimitado a qualquer e-mail.
+    2. Cliente VIP (permitir_sensivel = True): Acesso ilimitado a qualquer e-mail sem exigir vínculo prévio.
+    3. Cliente Comum: Exige vínculo do e-mail exato e verificação de expiração.
     """
+    if eh_admin(telegram_id):
+        return True
+
     cliente = obter_cliente(telegram_id)
+    
+    # LIBERAÇÃO VIP: Se o cliente tiver permissão VIP ativada, libera a busca de qualquer e-mail
+    if cliente.get("permitir_sensivel"):
+        return True
+
     emails_permitidos = cliente.get("emails_permitidos", {})
     
     if email_informado in emails_permitidos:
@@ -419,11 +428,11 @@ async def listar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         emails = cliente.get("emails_permitidos", {})
-        vip = "Sim ⭐️" if cliente.get("permitir_sensivel") else "Não"
+        vip = "Sim ⭐️ (Sem restrições de e-mail)" if cliente.get("permitir_sensivel") else "Não"
         
         texto = f"📋 **Cadastro do ID `{target_id}`** (VIP: {vip}):\n\n"
         if not emails:
-            texto += "Nenhum e-mail autorizado."
+            texto += "Nenhum e-mail vinculado."
         else:
             for em, exp in emails.items():
                 data_str = exp.split("T")[0] if exp else "Sem expiração"
@@ -441,7 +450,7 @@ async def listar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for c in todos:
         t_id = c.get("telegram_id")
         emails = c.get("emails_permitidos", {})
-        vip = "⭐️ VIP" if c.get("permitir_sensivel") else ""
+        vip = "⭐️ VIP (Livre)" if c.get("permitir_sensivel") else ""
         
         texto += f"👤 **ID:** `{t_id}` {vip}\n"
         if isinstance(emails, dict) and emails:
@@ -449,7 +458,7 @@ async def listar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 d_str = exp.split("T")[0] if exp else "Sem expiração"
                 texto += f"   └── `{em}` ({d_str})\n"
         else:
-            texto += "   └── *Sem e-mails*\n"
+            texto += "   └── *Sem e-mails vinculados*\n"
         texto += "\n"
 
     if len(texto) > 4000:
@@ -459,6 +468,11 @@ async def listar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(texto, parse_mode="Markdown")
 
 async def vip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Ativa/Desativa o acesso VIP para um ID.
+    Uso: /vip <telegram_id> <sim ou nao>
+    Exemplo: /vip 123456789 sim
+    """
     if not eh_admin(update.effective_user.id):
         await update.message.reply_text("⛔ **Acesso negado.** Apenas o administrador pode usar este comando.")
         return
@@ -476,8 +490,12 @@ async def vip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     salvar_cliente(target_id, emails_dict, permitir_sensivel=status_vip)
     
-    txt_status = "ATIVADO ⭐️" if status_vip else "DESATIVADO"
-    await update.message.reply_text(f"👑 Status VIP do ID `{target_id}` foi **{txt_status}**!", parse_mode="Markdown")
+    if status_vip:
+        txt_status = "ATIVADO ⭐️\nEste ID agora pode pesquisar QUALQUER e-mail sem restrições!"
+    else:
+        txt_status = "DESATIVADO\nEste ID voltou a depender de e-mails específicos cadastrados."
+
+    await update.message.reply_text(f"👑 Status VIP do ID `{target_id}` foi **{txt_status}**", parse_mode="Markdown")
 
 async def processar_mensagem_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
@@ -533,7 +551,7 @@ def main():
     app.add_handler(CommandHandler("vip", vip_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, processar_mensagem_email))
 
-    logger.info("Bot operando com integração Supabase e servidor HTTP de Health Check...")
+    logger.info("Bot operando com integração Supabase e liberação VIP ativa...")
     app.run_polling()
 
 if __name__ == "__main__":
