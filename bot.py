@@ -281,9 +281,16 @@ def buscar_codigos_streaming(email_destino: str) -> list:
 
     resultados = []
 
+    # Prepara variações com e sem pontos para o IMAP encontrar o e-mail no servidor
+    partes = email_destino.split("@")
+    user_orig = partes[0]
+    domain_orig = partes[1] if len(partes) > 1 else "gmail.com"
+    user_sem_pontos = user_orig.replace(".", "")
+    email_sem_pontos = f"{user_sem_pontos}@{domain_orig}"
+
     for conta in contas:
-        imap_user = conta.get("user")
-        imap_pass = conta.get("pass")
+        imap_user = conta.get("user", "")
+        imap_pass = conta.get("pass", "")
         imap_server = conta.get("server", "imap.gmail.com")
 
         if not imap_user or not imap_pass:
@@ -294,16 +301,23 @@ def buscar_codigos_streaming(email_destino: str) -> list:
             mail.login(imap_user, imap_pass)
             mail.select("inbox")
 
+            # 1. Tenta buscar por TO com e-mail digitado
             status, messages = mail.search(None, f'(TO "{email_destino}")')
+            
+            # 2. Se não encontrar, tenta buscar por TO sem pontos
             if status != "OK" or not messages[0]:
-                status, messages = mail.search(None, f'TEXT "{email_destino}"')
+                status, messages = mail.search(None, f'(TO "{email_sem_pontos}")')
+
+            # 3. Se ainda não encontrar, pega todas as mensagens recentes da caixa
+            if status != "OK" or not messages[0]:
+                status, messages = mail.search(None, 'ALL')
 
             if not messages[0]:
                 mail.logout()
                 continue
 
             id_list = messages[0].split()
-            ultimos_ids = id_list[-5:]
+            ultimos_ids = id_list[-10:]  # Varre os últimos 10 e-mails recentes da caixa
 
             for msg_id in reversed(ultimos_ids):
                 res, msg_data = mail.fetch(msg_id, "(RFC822)")
@@ -323,29 +337,39 @@ def buscar_codigos_streaming(email_destino: str) -> list:
                         if "disney" in msg.get("From", "").lower() or "disney" in assunto.lower():
                             codigos_disney = re.findall(r'\b\d{6}\b', corpo)
                             if codigos_disney:
-                                resultados.append(f"✨ **Disney+**: Seu código de acesso é **{codigos_disney[0]}**")
+                                item_res = f"✨ **Disney+**: Seu código de acesso é **{codigos_disney[0]}**"
+                                if item_res not in resultados:
+                                    resultados.append(item_res)
 
-                        # 2. NETFLIX (Residência principal, Acesso temporário/viagem ou Código)
+                        # 2. NETFLIX
                         elif "netflix" in msg.get("From", "").lower() or "netflix" in assunto.lower():
                             links_netflix = re.findall(r'https?://[^\s<>"]+netflix\.com[^\s<>"]+', corpo)
                             codigos_netflix = re.findall(r'\b\d{4,8}\b', corpo)
 
                             if links_netflix:
-                                resultados.append(f"🔴 **Netflix (Link)**: [Clique aqui para confirmar/acessar]({links_netflix[0]})")
+                                item_res = f"🔴 **Netflix (Link)**: [Clique aqui para confirmar/acessar]({links_netflix[0]})"
+                                if item_res not in resultados:
+                                    resultados.append(item_res)
                             elif codigos_netflix:
-                                resultados.append(f"🔴 **Netflix (Código)**: **{codigos_netflix[0]}**")
+                                item_res = f"🔴 **Netflix (Código)**: **{codigos_netflix[0]}**"
+                                if item_res not in resultados:
+                                    resultados.append(item_res)
 
-                        # 3. HBO MAX / MAX (Links de redefinição / Acesso)
+                        # 3. HBO MAX / MAX
                         elif "hbo" in msg.get("From", "").lower() or "max" in msg.get("From", "").lower() or "max" in assunto.lower():
                             links_hbo = re.findall(r'https?://[^\s<>"]+(?:max|hbomax)\.com[^\s<>"]+', corpo)
                             if links_hbo:
-                                resultados.append(f"🟣 **HBO Max / MAX**: [Clique aqui para acessar/redefinir]({links_hbo[0]})")
+                                item_res = f"🟣 **HBO Max / MAX**: [Clique aqui para acessar/redefinir]({links_hbo[0]})"
+                                if item_res not in resultados:
+                                    resultados.append(item_res)
 
-                        # 4. GLOBO / GLOBOPLAY (Links de redefinição / Acesso)
+                        # 4. GLOBO / GLOBOPLAY
                         elif "globo" in msg.get("From", "").lower() or "globo" in assunto.lower():
                             links_globo = re.findall(r'https?://[^\s<>"]+globo\.com[^\s<>"]+', corpo)
                             if links_globo:
-                                resultados.append(f"🔵 **Globo / Globoplay**: [Clique aqui para acessar/redefinir]({links_globo[0]})")
+                                item_res = f"🔵 **Globo / Globoplay**: [Clique aqui para acessar/redefinir]({links_globo[0]})"
+                                if item_res not in resultados:
+                                    resultados.append(item_res)
 
             mail.logout()
         except Exception as e:
@@ -401,7 +425,6 @@ async def autorizar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     while i < len(tokens):
         item = tokens[i]
         
-        # Formato email:data
         if ":" in item and "@" in item.split(":")[0]:
             partes = item.split(":", 1)
             em = partes[0].strip()
@@ -419,14 +442,13 @@ async def autorizar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     erros_data.append(f"• `{em}` (Data inválida: `{dt_str}`)")
             i += 1
 
-        # Formato separado por espaço (email data)
         elif "@" in item:
             em = item.strip()
             dt_str = None
             
             if i + 1 < len(tokens) and ("@" not in tokens[i + 1]):
                 dt_str = tokens[i + 1].strip()
-                i += 1  # consome a data
+                i += 1
             
             if dt_str and dt_str.lower() not in ["sem_data", "semdata", "none", "ilimitado", "0"]:
                 exp_iso, fmt_exib = processar_data_entrada(dt_str)
@@ -661,7 +683,7 @@ def main():
     app.add_handler(CommandHandler("vip", vip_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, processar_mensagem_email))
 
-    logger.info("Bot operando com suporte a múltiplos e-mails no comando /autorizar...")
+    logger.info("Bot operando com motor de busca IMAP atualizado para alias de pontos...")
     app.run_polling()
 
 if __name__ == "__main__":
