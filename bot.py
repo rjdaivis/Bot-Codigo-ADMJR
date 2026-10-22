@@ -61,14 +61,42 @@ def iniciar_servidor_web():
         logger.error(f"Erro ao iniciar servidor de verificação HTTP: {e}")
 
 # ==========================================
-# FUNÇÕES AUXILIARES DE SEGURANÇA
+# FUNÇÕES AUXILIARES DE DATAS E SEGURANÇA
 # ==========================================
 
 def eh_admin(user_id) -> bool:
-    """Verifica se o usuário que executou a ação é o Administrador do bot."""
+    """Verifica se o utilizador que executou a ação é o Administrador do bot."""
     if not ADMIN_ID:
         return False
     return str(user_id) == str(ADMIN_ID)
+
+def processar_data_entrada(data_str: str):
+    """
+    Tenta converter a data inserida pelo utilizador (DD-MM-AAAA, DD/MM/AAAA, DD-MM-AA)
+    para formato ISO de armazenamento.
+    """
+    formatos = ["%d-%m-%Y", "%d/%m/%Y", "%d-%m-%y", "%d/%m/%y"]
+    for fmt in formatos:
+        try:
+            dt = datetime.strptime(data_str, fmt)
+            return dt.isoformat(), dt.strftime("%d-%m-%Y")
+        except ValueError:
+            pass
+    return None, None
+
+def formatar_data_exibicao(iso_str: str) -> str:
+    """Converte uma string ISO ou formato antigo para DD-MM-AAAA para exibição no Telegram."""
+    if not iso_str:
+        return "Sem expiração"
+    try:
+        dt = datetime.fromisoformat(iso_str)
+        return dt.strftime("%d-%m-%Y")
+    except Exception:
+        try:
+            dt = datetime.strptime(iso_str, "%Y-%m-%d")
+            return dt.strftime("%d-%m-%Y")
+        except Exception:
+            return iso_str
 
 # ==========================================
 # BANCO DE DADOS (SUPABASE) & MIGRAÇÃO
@@ -330,7 +358,7 @@ async def autorizar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if len(context.args) < 2:
-        await update.message.reply_text("Uso correto: `/autorizar <telegram_id> <email> [AAAA-MM-DD]`", parse_mode="Markdown")
+        await update.message.reply_text("Uso correto: `/autorizar <telegram_id> <email> [DD-MM-AAAA]`", parse_mode="Markdown")
         return
 
     target_id = context.args[0]
@@ -338,11 +366,12 @@ async def autorizar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data_expira = context.args[2] if len(context.args) >= 3 else None
 
     exp_iso = None
+    data_formatada_exibicao = None
+
     if data_expira:
-        try:
-            exp_iso = datetime.strptime(data_expira, "%Y-%m-%d").isoformat()
-        except ValueError:
-            await update.message.reply_text("⚠️ Formato de data inválido! Use `AAAA-MM-DD` (ex: 2026-12-31).")
+        exp_iso, data_formatada_exibicao = processar_data_entrada(data_expira)
+        if not exp_iso:
+            await update.message.reply_text("⚠️ Formato de data inválido! Use `DD-MM-AAAA` (ex: 31-12-2026).")
             return
 
     cliente = obter_cliente(target_id)
@@ -351,7 +380,7 @@ async def autorizar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     salvar_cliente(target_id, emails_dict, cliente.get("permitir_sensivel", False))
     
-    msg_data = f" (Expira em: `{data_expira}`)" if data_expira else " (Acesso vitalício/sem data)"
+    msg_data = f" (Expira em: `{data_formatada_exibicao}`)" if data_formatada_exibicao else " (Acesso vitalício/sem data)"
     await update.message.reply_text(
         f"✅ E-mail `{target_email}` cadastrado para o ID `{target_id}`{msg_data}!",
         parse_mode="Markdown"
@@ -363,7 +392,7 @@ async def editar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if len(context.args) < 3:
-        await update.message.reply_text("Uso correto: `/editar <telegram_id> <email> <AAAA-MM-DD ou sem_data>`", parse_mode="Markdown")
+        await update.message.reply_text("Uso correto: `/editar <telegram_id> <email> <DD-MM-AAAA ou sem_data>`", parse_mode="Markdown")
         return
 
     target_id = context.args[0]
@@ -381,13 +410,12 @@ async def editar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         emails_dict[target_email] = None
         msg_exp = "Removida a data (Acesso ilimitado)"
     else:
-        try:
-            exp_iso = datetime.strptime(nova_opcao, "%Y-%m-%d").isoformat()
-            emails_dict[target_email] = exp_iso
-            msg_exp = f"Nova data definida para `{nova_opcao}`"
-        except ValueError:
-            await update.message.reply_text("⚠️ Formato de data inválido! Use `AAAA-MM-DD` ou `sem_data`.")
+        exp_iso, data_formatada_exibicao = processar_data_entrada(nova_opcao)
+        if not exp_iso:
+            await update.message.reply_text("⚠️ Formato de data inválido! Use `DD-MM-AAAA` (ex: 31-12-2026) ou `sem_data`.")
             return
+        emails_dict[target_email] = exp_iso
+        msg_exp = f"Nova data definida para `{data_formatada_exibicao}`"
 
     salvar_cliente(target_id, emails_dict, cliente.get("permitir_sensivel", False))
     await update.message.reply_text(
@@ -437,7 +465,7 @@ async def listar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             texto += "Nenhum e-mail vinculado."
         else:
             for em, exp in emails.items():
-                data_str = exp.split("T")[0] if exp else "Sem expiração"
+                data_str = formatar_data_exibicao(exp)
                 texto += f"• `{em}` — Expira: *{data_str}*\n"
 
         await update.message.reply_text(texto, parse_mode="Markdown")
@@ -457,7 +485,7 @@ async def listar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         texto += f"👤 **ID:** `{t_id}` {vip}\n"
         if isinstance(emails, dict) and emails:
             for em, exp in emails.items():
-                d_str = exp.split("T")[0] if exp else "Sem expiração"
+                d_str = formatar_data_exibicao(exp)
                 texto += f"   └── `{em}` ({d_str})\n"
         else:
             texto += "   └── *Sem e-mails vinculados*\n"
@@ -546,7 +574,7 @@ def main():
     app.add_handler(CommandHandler("vip", vip_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, processar_mensagem_email))
 
-    logger.info("Bot operando com orientação de Primeiro Acesso ativada...")
+    logger.info("Bot operando com suporte a data no formato DD-MM-AAAA...")
     app.run_polling()
 
 if __name__ == "__main__":
