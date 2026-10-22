@@ -37,7 +37,12 @@ if not TELEGRAM_TOKEN or not SUPABASE_URL or not SUPABASE_KEY:
     logger.error("ERRO: TOKEN_TELEGRAM, SUPABASE_URL ou SUPABASE_KEY não foram definidos no Render.")
 
 # Inicialização do Cliente Supabase
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase: Client = None
+if SUPABASE_URL and SUPABASE_KEY:
+    try:
+        supabase = create_client(SUPABASE_URL.strip(), SUPABASE_KEY.strip())
+    except Exception as e:
+        logger.error(f"Erro ao inicializar cliente Supabase: {e}")
 
 # ==========================================
 # SERVIDOR WEB PARA HEALTH CHECK (RENDER)
@@ -102,28 +107,34 @@ def formatar_data_exibicao(iso_str: str) -> str:
 # BANCO DE DADOS (SUPABASE) & MIGRAÇÃO
 # ==========================================
 
-def obter_cliente(telegram_id: str) -> dict:
+def obter_cliente(telegram_id: str):
     """Busca os dados de um cliente no Supabase pelo Telegram ID."""
+    if not supabase:
+        return None, "Cliente Supabase não inicializado (Verifique URL/KEY)."
     try:
         response = supabase.table("clientes_bot").select("*").eq("telegram_id", str(telegram_id)).execute()
         if response.data:
-            return response.data[0]
-        return {}
+            return response.data[0], None
+        return {}, None
     except Exception as e:
         logger.error(f"Erro ao obter cliente {telegram_id} no Supabase: {e}")
-        return None
+        return None, str(e)
 
 def obter_todos_clientes():
-    """Busca todos os clientes cadastrados no Supabase. Retorna None em caso de erro no banco."""
+    """Busca todos os clientes cadastrados no Supabase."""
+    if not supabase:
+        return None, "Cliente Supabase não inicializado (Verifique URL/KEY)."
     try:
         response = supabase.table("clientes_bot").select("*").execute()
-        return response.data
+        return response.data, None
     except Exception as e:
         logger.error(f"Erro ao obter todos os clientes do Supabase: {e}")
-        return None
+        return None, str(e)
 
-def salvar_cliente(telegram_id: str, emails_dict: dict, permitir_sensivel: bool = False) -> bool:
-    """Salva ou atualiza os e-mails do cliente no Supabase. Retorna True se salvou com sucesso."""
+def salvar_cliente(telegram_id: str, emails_dict: dict, permitir_sensivel: bool = False):
+    """Salva ou atualiza os e-mails do cliente no Supabase. Retorna (sucesso, mensagem_erro)."""
+    if not supabase:
+        return False, "Conexão com Supabase não foi iniciada. Verifique as variáveis de ambiente."
     try:
         payload = {
             "telegram_id": str(telegram_id),
@@ -133,10 +144,11 @@ def salvar_cliente(telegram_id: str, emails_dict: dict, permitir_sensivel: bool 
         }
         supabase.table("clientes_bot").upsert(payload).execute()
         logger.info(f"Cliente {telegram_id} salvo com sucesso no Supabase.")
-        return True
+        return True, None
     except Exception as e:
-        logger.error(f"Erro ao salvar cliente {telegram_id} no Supabase: {e}")
-        return False
+        err_msg = str(e)
+        logger.error(f"Erro ao salvar cliente {telegram_id} no Supabase: {err_msg}")
+        return False, err_msg
 
 def migrar_json_para_supabase():
     """Lê o arquivo clientes.json do GitHub e importa tudo para o Supabase se ainda não existir."""
@@ -148,7 +160,7 @@ def migrar_json_para_supabase():
             
             logger.info("Verificando migração do clientes.json para o Supabase...")
             for telegram_id, info in dados.items():
-                cliente_existente = obter_cliente(str(telegram_id))
+                cliente_existente, _ = obter_cliente(str(telegram_id))
                 if not cliente_existente:
                     if isinstance(info, dict):
                         emails = info.get("emails", {})
@@ -177,7 +189,7 @@ def validar_email_estrito(telegram_id: str, email_informado: str) -> bool:
     if eh_admin(telegram_id):
         return True
 
-    cliente = obter_cliente(telegram_id)
+    cliente, _ = obter_cliente(telegram_id)
     if not cliente:
         return False
 
@@ -378,11 +390,12 @@ async def autorizar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⚠️ Formato de data inválido! Use `DD-MM-AAAA` (ex: 31-12-2026).")
             return
 
-    cliente = obter_cliente(target_id) or {}
+    cliente, erro_get = obter_cliente(target_id)
+    cliente = cliente or {}
     emails_dict = cliente.get("emails_permitidos", {})
     emails_dict[target_email] = exp_iso
 
-    sucesso = salvar_cliente(target_id, emails_dict, cliente.get("permitir_sensivel", False))
+    sucesso, detalhe_erro = salvar_cliente(target_id, emails_dict, cliente.get("permitir_sensivel", False))
     
     if sucesso:
         msg_data = f" (Expira em: `{data_formatada_exibicao}`)" if data_formatada_exibicao else " (Acesso vitalício/sem data)"
@@ -392,7 +405,7 @@ async def autorizar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     else:
         await update.message.reply_text(
-            "❌ **Erro ao salvar no banco de dados Supabase!**\n\n"
+            f"❌ **Erro ao salvar no Supabase:**\n`{detalhe_erro}`\n\n"
             "Verifique as variáveis `SUPABASE_URL` e `SUPABASE_KEY` no Render.",
             parse_mode="Markdown"
         )
@@ -410,7 +423,8 @@ async def editar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target_email = context.args[1]
     nova_opcao = context.args[2].lower()
 
-    cliente = obter_cliente(target_id) or {}
+    cliente, _ = obter_cliente(target_id)
+    cliente = cliente or {}
     emails_dict = cliente.get("emails_permitidos", {})
 
     if target_email not in emails_dict:
@@ -428,14 +442,14 @@ async def editar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         emails_dict[target_email] = exp_iso
         msg_exp = f"Nova data definida para `{data_formatada_exibicao}`"
 
-    sucesso = salvar_cliente(target_id, emails_dict, cliente.get("permitir_sensivel", False))
+    sucesso, detalhe_erro = salvar_cliente(target_id, emails_dict, cliente.get("permitir_sensivel", False))
     if sucesso:
         await update.message.reply_text(
             f"✏️ **Atualizado!** E-mail `{target_email}` do ID `{target_id}`: {msg_exp}.",
             parse_mode="Markdown"
         )
     else:
-        await update.message.reply_text("❌ **Erro ao atualizar no banco Supabase!**", parse_mode="Markdown")
+        await update.message.reply_text(f"❌ **Erro ao atualizar no Supabase:**\n`{detalhe_erro}`", parse_mode="Markdown")
 
 async def remover_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not eh_admin(update.effective_user.id):
@@ -449,16 +463,17 @@ async def remover_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target_id = context.args[0]
     target_email = context.args[1]
 
-    cliente = obter_cliente(target_id) or {}
+    cliente, _ = obter_cliente(target_id)
+    cliente = cliente or {}
     emails_dict = cliente.get("emails_permitidos", {})
 
     if target_email in emails_dict:
         del emails_dict[target_email]
-        sucesso = salvar_cliente(target_id, emails_dict, cliente.get("permitir_sensivel", False))
+        sucesso, detalhe_erro = salvar_cliente(target_id, emails_dict, cliente.get("permitir_sensivel", False))
         if sucesso:
             await update.message.reply_text(f"🗑️ E-mail `{target_email}` **removido com sucesso** do ID `{target_id}`!", parse_mode="Markdown")
         else:
-            await update.message.reply_text("❌ **Erro ao salvar alteração no Supabase!**", parse_mode="Markdown")
+            await update.message.reply_text(f"❌ **Erro ao salvar no Supabase:**\n`{detalhe_erro}`", parse_mode="Markdown")
     else:
         await update.message.reply_text(f"❌ O e-mail `{target_email}` não estava cadastrado para o ID `{target_id}`.", parse_mode="Markdown")
 
@@ -469,9 +484,9 @@ async def listar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if len(context.args) >= 1:
         target_id = context.args[0]
-        cliente = obter_cliente(target_id)
-        if cliente is None:
-            await update.message.reply_text("⚠️ **Erro de conexão com o banco Supabase!**", parse_mode="Markdown")
+        cliente, erro_get = obter_cliente(target_id)
+        if erro_get:
+            await update.message.reply_text(f"⚠️ **Erro no Supabase:**\n`{erro_get}`", parse_mode="Markdown")
             return
         if not cliente:
             await update.message.reply_text(f"❌ Nenhum registro encontrado para o Telegram ID `{target_id}`.", parse_mode="Markdown")
@@ -491,13 +506,9 @@ async def listar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(texto, parse_mode="Markdown")
         return
 
-    todos = obter_todos_clientes()
-    if todos is None:
-        await update.message.reply_text(
-            "⚠️ **Erro ao conectar ao Supabase!**\n\n"
-            "Verifique se as variáveis `SUPABASE_URL` e `SUPABASE_KEY` no Render estão corretas.",
-            parse_mode="Markdown"
-        )
+    todos, erro_todos = obter_todos_clientes()
+    if erro_todos:
+        await update.message.reply_text(f"⚠️ **Erro de conexão com o Supabase:**\n`{erro_todos}`", parse_mode="Markdown")
         return
 
     if not todos:
@@ -516,7 +527,7 @@ async def listar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 d_str = formatar_data_exibicao(exp)
                 texto += f"   └── `{em}` ({d_str})\n"
         else:
-            texto += "   └── *Sem e-mails vinculados*\n"
+            texto += "   └── *Sem e-emails vinculados*\n"
         texto += "\n"
 
     if len(texto) > 4000:
@@ -538,16 +549,17 @@ async def vip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     opcao = context.args[1].lower()
     status_vip = opcao in ["sim", "s", "true", "1", "on"]
 
-    cliente = obter_cliente(target_id) or {}
+    cliente, _ = obter_cliente(target_id)
+    cliente = cliente or {}
     emails_dict = cliente.get("emails_permitidos", {})
 
-    sucesso = salvar_cliente(target_id, emails_dict, permitir_sensivel=status_vip)
+    sucesso, detalhe_erro = salvar_cliente(target_id, emails_dict, permitir_sensivel=status_vip)
     
     if sucesso:
         txt_status = "ATIVADO ⭐️\nEste ID agora pode pesquisar QUALQUER e-mail sem restrições!" if status_vip else "DESATIVADO\nEste ID voltou a depender de e-mails específicos cadastrados."
         await update.message.reply_text(f"👑 Status VIP do ID `{target_id}` foi **{txt_status}**", parse_mode="Markdown")
     else:
-        await update.message.reply_text("❌ **Erro ao salvar no Supabase!**", parse_mode="Markdown")
+        await update.message.reply_text(f"❌ **Erro ao salvar no Supabase:**\n`{detalhe_erro}`", parse_mode="Markdown")
 
 async def processar_mensagem_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
@@ -601,7 +613,7 @@ def main():
     app.add_handler(CommandHandler("vip", vip_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, processar_mensagem_email))
 
-    logger.info("Bot operando com diagnóstico de erros do Supabase ativado...")
+    logger.info("Bot operando com exibição detalhada de erros...")
     app.run_polling()
 
 if __name__ == "__main__":
