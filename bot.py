@@ -177,7 +177,7 @@ def validar_email_estrito(telegram_id: str, email_informado: str) -> bool:
     return False
 
 # ==========================================
-# MOTOR ORIGINAL DE BUSCA EM CONTAS (CONTAS.JSON)
+# MOTOR DE BUSCA EM CONTAS (CONTAS.JSON)
 # ==========================================
 
 def carregar_contas_email() -> list:
@@ -233,19 +233,33 @@ def extrair_corpo_email(msg) -> str:
     return corpo
 
 def buscar_codigos_streaming(email_destino: str) -> list:
-    """Motor original e direto de busca de códigos/links nos e-mails."""
+    """Varre as caixas de entrada lendo mensagens recentes e identificando os streamings."""
     contas = carregar_contas_email()
     if not contas:
         return ["⚠️ Nenhuma conta de e-mail foi encontrada no arquivo `contas.json`."]
 
     resultados = []
 
+    # Prepara chave sem pontos para encontrar a conta certa no contas.json
+    partes_dest = email_destino.split("@")
+    user_dest_limpo = partes_dest[0].replace(".", "").lower()
+    domain_dest = partes_dest[1].lower() if len(partes_dest) > 1 else "gmail.com"
+
     for conta in contas:
-        imap_user = conta.get("user")
-        imap_pass = conta.get("pass")
+        imap_user = conta.get("user", "")
+        imap_pass = conta.get("pass", "")
         imap_server = conta.get("server", "imap.gmail.com")
 
         if not imap_user or not imap_pass:
+            continue
+
+        # Compara conta sem pontos
+        partes_conta = imap_user.split("@")
+        user_conta_limpo = partes_conta[0].replace(".", "").lower()
+        domain_conta = partes_conta[1].lower() if len(partes_conta) > 1 else "gmail.com"
+
+        eh_conta_alvo = (user_conta_limpo == user_dest_limpo and domain_conta == domain_dest)
+        if not eh_conta_alvo and len(contas) > 1:
             continue
 
         try:
@@ -253,16 +267,15 @@ def buscar_codigos_streaming(email_destino: str) -> list:
             mail.login(imap_user, imap_pass)
             mail.select("inbox")
 
-            status, messages = mail.search(None, f'(TO "{email_destino}")')
-            if status != "OK" or not messages[0]:
-                status, messages = mail.search(None, f'TEXT "{email_destino}"')
+            # Busca todas as mensagens recentes diretamente
+            status, messages = mail.search(None, 'ALL')
 
-            if not messages[0]:
+            if status != "OK" or not messages[0]:
                 mail.logout()
                 continue
 
             id_list = messages[0].split()
-            ultimos_ids = id_list[-5:]
+            ultimos_ids = id_list[-10:]
 
             for msg_id in reversed(ultimos_ids):
                 res, msg_data = mail.fetch(msg_id, "(RFC822)")
@@ -272,41 +285,72 @@ def buscar_codigos_streaming(email_destino: str) -> list:
                 for response_part in msg_data:
                     if isinstance(response_part, tuple):
                         msg = email.message_from_bytes(response_part[1])
-                        assunto, encoding = decode_header(msg.get("Subject", ""))[0]
-                        if isinstance(assunto, bytes):
-                            assunto = assunto.decode(encoding or "utf-8", errors="ignore")
+                        
+                        # Processa assunto
+                        assunto_raw = decode_header(msg.get("Subject", ""))
+                        assunto = ""
+                        for sub, enc in assunto_raw:
+                            if isinstance(sub, bytes):
+                                assunto += sub.decode(enc or "utf-8", errors="ignore")
+                            elif isinstance(sub, str):
+                                assunto += sub
+
+                        # Processa remetente
+                        from_raw = decode_header(msg.get("From", ""))
+                        remetente = ""
+                        for frm, enc in from_raw:
+                            if isinstance(frm, bytes):
+                                remetente += frm.decode(enc or "utf-8", errors="ignore")
+                            elif isinstance(frm, str):
+                                remetente += frm
+
+                        assunto_lower = assunto.lower()
+                        remetente_lower = remetente.lower()
                         
                         corpo = extrair_corpo_email(msg)
+                        corpo_texto = re.sub(r'<[^>]+>', ' ', corpo)
 
                         # 1. DISNEY+ (Código numérico de 6 dígitos)
-                        if "disney" in msg.get("From", "").lower() or "disney" in assunto.lower():
-                            codigos_disney = re.findall(r'\b\d{6}\b', corpo)
+                        if "disney" in remetente_lower or "disney" in assunto_lower:
+                            codigos_disney = re.findall(r'\b\d{6}\b', corpo_texto)
                             if codigos_disney:
-                                resultados.append(f"✨ **Disney+**: Seu código de acesso é **{codigos_disney[0]}**")
+                                item_res = f"✨ **Disney+**: Seu código de acesso é **{codigos_disney[0]}**"
+                                if item_res not in resultados:
+                                    resultados.append(item_res)
 
                         # 2. NETFLIX
-                        elif "netflix" in msg.get("From", "").lower() or "netflix" in assunto.lower():
+                        elif "netflix" in remetente_lower or "netflix" in assunto_lower:
                             links_netflix = re.findall(r'https?://[^\s<>"]+netflix\.com[^\s<>"]+', corpo)
-                            codigos_netflix = re.findall(r'\b\d{4,8}\b', corpo)
+                            codigos_netflix = re.findall(r'\b\d{4,8}\b', corpo_texto)
 
                             if links_netflix:
-                                resultados.append(f"🔴 **Netflix (Link)**: [Clique aqui para confirmar/acessar]({links_netflix[0]})")
+                                item_res = f"🔴 **Netflix (Link)**: [Clique aqui para confirmar/acessar]({links_netflix[0]})"
+                                if item_res not in resultados:
+                                    resultados.append(item_res)
                             elif codigos_netflix:
-                                resultados.append(f"🔴 **Netflix (Código)**: **{codigos_netflix[0]}**")
+                                item_res = f"🔴 **Netflix (Código)**: **{codigos_netflix[0]}**"
+                                if item_res not in resultados:
+                                    resultados.append(item_res)
 
                         # 3. HBO MAX / MAX
-                        elif "hbo" in msg.get("From", "").lower() or "max" in msg.get("From", "").lower() or "max" in assunto.lower():
+                        elif "hbo" in remetente_lower or "max" in remetente_lower or "max" in assunto_lower:
                             links_hbo = re.findall(r'https?://[^\s<>"]+(?:max|hbomax)\.com[^\s<>"]+', corpo)
                             if links_hbo:
-                                resultados.append(f"🟣 **HBO Max / MAX**: [Clique aqui para acessar/redefinir]({links_hbo[0]})")
+                                item_res = f"🟣 **HBO Max / MAX**: [Clique aqui para acessar/redefinir]({links_hbo[0]})"
+                                if item_res not in resultados:
+                                    resultados.append(item_res)
 
                         # 4. GLOBO / GLOBOPLAY
-                        elif "globo" in msg.get("From", "").lower() or "globo" in assunto.lower():
+                        elif "globo" in remetente_lower or "globo" in assunto_lower:
                             links_globo = re.findall(r'https?://[^\s<>"]+globo\.com[^\s<>"]+', corpo)
                             if links_globo:
-                                resultados.append(f"🔵 **Globo / Globoplay**: [Clique aqui para acessar/redefinir]({links_globo[0]})")
+                                item_res = f"🔵 **Globo / Globoplay**: [Clique aqui para acessar/redefinir]({links_globo[0]})"
+                                if item_res not in resultados:
+                                    resultados.append(item_res)
 
             mail.logout()
+            if resultados:
+                break
         except Exception as e:
             logger.error(f"Erro ao consultar conta {imap_user}: {e}")
 
@@ -616,7 +660,7 @@ def main():
     app.add_handler(CommandHandler("vip", vip_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, processar_mensagem_email))
 
-    logger.info("Bot operando com motor original restaurado e banco Supabase em DD-MM-AAAA...")
+    logger.info("Bot operando com busca direta em caixa de entrada (ALL) e leitura sem falhas por alias...")
     app.run_polling()
 
 if __name__ == "__main__":
