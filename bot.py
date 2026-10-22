@@ -75,7 +75,7 @@ def iniciar_servidor_web():
 # ==========================================
 
 def eh_admin(user_id) -> bool:
-    """Verifica se o utilizador que executou a ação é o Administrador do bot."""
+    """Verifica se o usuário que executou a ação é o Administrador do bot."""
     if not ADMIN_ID:
         return False
     return str(user_id) == str(ADMIN_ID)
@@ -284,34 +284,38 @@ def extrair_corpo_email(msg) -> str:
             corpo = payload.decode("utf-8", errors="ignore")
     return corpo
 
-def extrair_codigo_disney(texto: str) -> str:
-    """Extrai o código numérico de 6 dígitos da Disney+ mesmo dentro de HTML ou com espaços."""
-    texto_limpo = html.unescape(re.sub(r'<[^>]+>', ' ', texto))
-    
-    padrao = r'\b(?:\d[\s\xa0-]*){6}\b'
-    encontrados = re.findall(padrao, texto_limpo)
-    
-    for item in encontrados:
+def extrair_codigo_disney(texto_bruto: str) -> str:
+    """Extrai o código numérico de 6 dígitos da Disney+ com limpeza completa de HTML."""
+    if not texto_bruto:
+        return None
+
+    texto = html.unescape(texto_bruto)
+    texto_limpo = re.sub(r'<[^>]+>', ' ', texto)
+    texto_limpo = re.sub(r'[\xa0\s\t\n\r]+', ' ', texto_limpo)
+
+    m_direto = re.findall(r'\b\d{6}\b', texto_limpo)
+    if m_direto:
+        return m_direto[0]
+
+    m_espacado = re.findall(r'\b(?:\d[\s-]*){6}\b', texto_limpo)
+    for item in m_espacado:
         digitos = re.sub(r'\D', '', item)
         if len(digitos) == 6:
             return digitos
-            
-    digitos_diretos = re.findall(r'\b\d{6}\b', texto_limpo)
-    if digitos_diretos:
-        return digitos_diretos[0]
-        
+
     return None
 
-def buscar_codigos_streaming(email_destino: str) -> list:
+def buscar_codigos_streaming(email_destino: str) -> tuple[list, list]:
     """
     Varre as caixas de entrada do contas.json decodificando assuntos completos
-    e extraindo códigos/links de streamings.
+    e extraindo códigos/links de streamings. Retorna (resultados, mensagens_erro).
     """
     contas = carregar_contas_email()
     if not contas:
-        return ["⚠️ Nenhuma conta de e-mail foi encontrada no arquivo `contas.json`."]
+        return [], ["⚠️ Nenhuma conta de e-mail foi encontrada no arquivo `contas.json`."]
 
     resultados = []
+    erros_conexao = []
 
     # Prepara versão sem pontos do e-mail digitado
     partes_cli = email_destino.split("@")
@@ -319,7 +323,6 @@ def buscar_codigos_streaming(email_destino: str) -> list:
     domain_cli = partes_cli[1].lower() if len(partes_cli) > 1 else "gmail.com"
     email_cli_sem_pontos = f"{user_cli}@{domain_cli}"
 
-    # Ordena para aceder primeiro à conta correspondente
     contas_priorizadas = []
     outras_contas = []
 
@@ -356,7 +359,7 @@ def buscar_codigos_streaming(email_destino: str) -> list:
                 continue
 
             id_list = messages[0].split()
-            ultimos_ids = id_list[-15:]
+            ultimos_ids = id_list[-20:]
 
             for msg_id in reversed(ultimos_ids):
                 res, msg_data = mail.fetch(msg_id, "(RFC822)")
@@ -369,7 +372,6 @@ def buscar_codigos_streaming(email_destino: str) -> list:
                         
                         assunto = decodificar_texto_cabecalho(msg.get("Subject", "")).lower()
                         remetente = decodificar_texto_cabecalho(msg.get("From", "")).lower()
-                        
                         corpo = extrair_corpo_email(msg)
 
                         # 1. DISNEY+
@@ -411,14 +413,17 @@ def buscar_codigos_streaming(email_destino: str) -> list:
                                     resultados.append(item_res)
 
             mail.logout()
-            
+
             if resultados and conta in contas_priorizadas:
                 break
 
         except Exception as e:
-            logger.error(f"Erro ao consultar conta {imap_user}: {e}")
+            err_str = str(e)
+            logger.error(f"Erro ao consultar conta {imap_user}: {err_str}")
+            if conta in contas_priorizadas:
+                erros_conexao.append(f"⚠️ **Erro de login no e-mail `{imap_user}`:**\n`{err_str}`\n*Certifique-se de usar uma Senha de App do Google e ativar o IMAP nas configurações do Gmail.*")
 
-    return resultados
+    return resultados, erros_conexao
 
 # ==========================================
 # COMANDOS DO BOT TELEGRAM
@@ -685,11 +690,14 @@ async def processar_mensagem_email(update: Update, context: ContextTypes.DEFAULT
             parse_mode="Markdown"
         )
         
-        resultados = buscar_codigos_streaming(email_recebido)
+        resultados, erros_conexao = buscar_codigos_streaming(email_recebido)
 
         if resultados:
             resposta = "📬 **Resultados encontrados:**\n\n" + "\n\n".join(resultados)
             await msg_wait.edit_text(resposta, parse_mode="Markdown", disable_web_page_preview=True)
+        elif erros_conexao:
+            resposta = "\n\n".join(erros_conexao)
+            await msg_wait.edit_text(resposta, parse_mode="Markdown")
         else:
             await msg_wait.edit_text(
                 f"ℹ️ Nenhum código ou link recente foi encontrado para `{email_recebido}` nos últimos minutos.\n\n"
@@ -726,7 +734,7 @@ def main():
     app.add_handler(CommandHandler("vip", vip_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, processar_mensagem_email))
 
-    logger.info("Bot operando com extrator HTML de códigos da Disney e decodificação avançada de assuntos...")
+    logger.info("Bot operando com diagnósticos IMAP ativados e extrator HTML Disney+ atualizado...")
     app.run_polling()
 
 if __name__ == "__main__":
