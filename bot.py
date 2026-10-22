@@ -3,6 +3,8 @@ import re
 import json
 import imaplib
 import email
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from email.header import decode_header
 import logging
 from datetime import datetime
@@ -38,13 +40,34 @@ if not TELEGRAM_TOKEN or not SUPABASE_URL or not SUPABASE_KEY:
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ==========================================
+# SERVIDOR WEB PARA HEALTH CHECK (RENDER)
+# ==========================================
+
+class ServidorHealthCheck(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"OK - Bot de Streamings Ativo")
+
+def iniciar_servidor_web():
+    """Inicia um servidor HTTP em segundo plano para o Render reconhecer que o serviço está Live."""
+    porta = int(os.getenv("PORT", 8080))
+    try:
+        servidor = HTTPServer(("0.0.0.0", porta), ServidorHealthCheck)
+        logger.info(f"Servidor de verificação do Render ativo na porta {porta}")
+        servidor.serve_forever()
+    except Exception as e:
+        logger.error(f"Erro ao iniciar servidor de verificação HTTP: {e}")
+
+# ==========================================
 # FUNÇÕES AUXILIARES DE SEGURANÇA
 # ==========================================
 
-def eh_admin(user_id: int or str) -> bool:
-    """Verifica se o usuário que executou o comando é o Administrador do bot."""
+def eh_admin(user_id) -> bool:
+    """Verifica se o utilizador que executou o comando é o Administrador do bot."""
     if not ADMIN_ID:
-        return True  # Se ADMIN_ID não foi definido, permite para evitar bloqueio acidental
+        return True
     return str(user_id) == str(ADMIN_ID)
 
 # ==========================================
@@ -291,10 +314,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(texto, parse_mode="Markdown")
 
 async def autorizar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Autoriza um e-mail para um ID do Telegram.
-    Uso: /autorizar <telegram_id> <email> [AAAA-MM-DD]
-    """
     if not eh_admin(update.effective_user.id):
         await update.message.reply_text("⛔ **Acesso negado.** Apenas o administrador pode usar este comando.")
         return
@@ -307,7 +326,6 @@ async def autorizar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target_email = context.args[1]
     data_expira = context.args[2] if len(context.args) >= 3 else None
 
-    # Formata data de expiração se fornecida
     exp_iso = None
     if data_expira:
         try:
@@ -329,10 +347,6 @@ async def autorizar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def editar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Edita a data de expiração de um e-mail cadastrado.
-    Uso: /editar <telegram_id> <email> <AAAA-MM-DD ou sem_data>
-    """
     if not eh_admin(update.effective_user.id):
         await update.message.reply_text("⛔ **Acesso negado.** Apenas o administrador pode usar este comando.")
         return
@@ -371,10 +385,6 @@ async def editar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def remover_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Remove um e-mail autorizador de um Telegram ID.
-    Uso: /remover <telegram_id> <email>
-    """
     if not eh_admin(update.effective_user.id):
         await update.message.reply_text("⛔ **Acesso negado.** Apenas o administrador pode usar este comando.")
         return
@@ -397,15 +407,10 @@ async def remover_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ O e-mail `{target_email}` não estava cadastrado para o ID `{target_id}`.", parse_mode="Markdown")
 
 async def listar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Lista todos os clientes e seus e-mails autorizados, ou consulta um ID específico.
-    Uso: /listar [telegram_id]
-    """
     if not eh_admin(update.effective_user.id):
         await update.message.reply_text("⛔ **Acesso negado.** Apenas o administrador pode usar este comando.")
         return
 
-    # Se informou um ID específico
     if len(context.args) >= 1:
         target_id = context.args[0]
         cliente = obter_cliente(target_id)
@@ -427,7 +432,6 @@ async def listar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(texto, parse_mode="Markdown")
         return
 
-    # Se não informou ID, lista todos os cadastrados no Supabase
     todos = obter_todos_clientes()
     if not todos:
         await update.message.reply_text("📂 Nenhum cliente cadastrado na base de dados.")
@@ -448,7 +452,6 @@ async def listar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             texto += "   └── *Sem e-mails*\n"
         texto += "\n"
 
-    # Caso a mensagem seja muito longa para o Telegram, divide em partes
     if len(texto) > 4000:
         for x in range(0, len(texto), 4000):
             await update.message.reply_text(texto[x:x+4000], parse_mode="Markdown")
@@ -456,10 +459,6 @@ async def listar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(texto, parse_mode="Markdown")
 
 async def vip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Define o status VIP (permissão sensível) de um cliente.
-    Uso: /vip <telegram_id> <sim ou nao>
-    """
     if not eh_admin(update.effective_user.id):
         await update.message.reply_text("⛔ **Acesso negado.** Apenas o administrador pode usar este comando.")
         return
@@ -481,7 +480,6 @@ async def vip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"👑 Status VIP do ID `{target_id}` foi **{txt_status}**!", parse_mode="Markdown")
 
 async def processar_mensagem_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Processa o e-mail enviado pelo usuário e realiza a busca de acessos."""
     user_id = str(update.effective_user.id)
     email_recebido = update.message.text.strip()
 
@@ -518,23 +516,24 @@ def main():
     if not TELEGRAM_TOKEN:
         raise ValueError("TOKEN_TELEGRAM não configurado nas variáveis do ambiente.")
 
-    # Executa a migração automática do clientes.json para o Supabase ao iniciar
+    # 1. Inicia o servidor HTTP em segundo plano para o Render liberar o deploy imediatamente
+    threading.Thread(target=iniciar_servidor_web, daemon=True).start()
+
+    # 2. Executa a migração do clientes.json para o Supabase
     migrar_json_para_supabase()
 
+    # 3. Inicializa o bot do Telegram
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-    # Registra os Handlers de Comandos
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("autorizar", autorizar_command))
     app.add_handler(CommandHandler("editar", editar_command))
     app.add_handler(CommandHandler("remover", remover_command))
     app.add_handler(CommandHandler("listar", listar_command))
     app.add_handler(CommandHandler("vip", vip_command))
-
-    # Handler para mensagens de texto (Validação e Busca de E-mails)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, processar_mensagem_email))
 
-    logger.info("Bot operando com integração Supabase e todos os comandos ativos...")
+    logger.info("Bot operando com integração Supabase e servidor HTTP de Health Check...")
     app.run_polling()
 
 if __name__ == "__main__":
