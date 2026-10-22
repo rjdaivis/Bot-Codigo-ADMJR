@@ -27,7 +27,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Variáveis de Ambiente do Render (Com tratamento estrito de barra / no final)
+# Variáveis de Ambiente do Render
 TELEGRAM_TOKEN = os.getenv("TOKEN_TELEGRAM", "").strip()
 RAW_SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
 RAW_SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()
@@ -378,41 +378,85 @@ async def autorizar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if len(context.args) < 2:
-        await update.message.reply_text("Uso correto: `/autorizar <telegram_id> <email> [DD-MM-AAAA]`", parse_mode="Markdown")
+        await update.message.reply_text(
+            "Uso correto:\n"
+            "• **Único:** `/autorizar <telegram_id> <email> [DD-MM-AAAA]`\n"
+            "• **Múltiplos:** `/autorizar <telegram_id> email1 DD-MM-AAAA email2 DD-MM-AAAA`\n"
+            "• **Formato com :** `/autorizar <telegram_id> email1:DD-MM-AAAA email2:DD-MM-AAAA`",
+            parse_mode="Markdown"
+        )
         return
 
     target_id = context.args[0]
-    target_email = context.args[1]
-    data_expira = context.args[2] if len(context.args) >= 3 else None
+    tokens = context.args[1:]
 
-    exp_iso = None
-    data_formatada_exibicao = None
-
-    if data_expira:
-        exp_iso, data_formatada_exibicao = processar_data_entrada(data_expira)
-        if not exp_iso:
-            await update.message.reply_text("⚠️ Formato de data inválido! Use `DD-MM-AAAA` (ex: 31-12-2026).")
-            return
-
-    cliente, erro_get = obter_cliente(target_id)
+    cliente, _ = obter_cliente(target_id)
     cliente = cliente or {}
     emails_dict = cliente.get("emails_permitidos", {})
-    emails_dict[target_email] = exp_iso
+
+    adicionados = []
+    erros_data = []
+    i = 0
+
+    while i < len(tokens):
+        item = tokens[i]
+        
+        # Formato email:data
+        if ":" in item and "@" in item.split(":")[0]:
+            partes = item.split(":", 1)
+            em = partes[0].strip()
+            dt_str = partes[1].strip()
+            
+            if dt_str.lower() in ["sem_data", "semdata", "none", "ilimitado", "0"]:
+                emails_dict[em] = None
+                adicionados.append(f"• `{em}` — *Sem expiração*")
+            else:
+                exp_iso, fmt_exib = processar_data_entrada(dt_str)
+                if exp_iso:
+                    emails_dict[em] = exp_iso
+                    adicionados.append(f"• `{em}` — Expira: *{fmt_exib}*")
+                else:
+                    erros_data.append(f"• `{em}` (Data inválida: `{dt_str}`)")
+            i += 1
+
+        # Formato separado por espaço (email data)
+        elif "@" in item:
+            em = item.strip()
+            dt_str = None
+            
+            if i + 1 < len(tokens) and ("@" not in tokens[i + 1]):
+                dt_str = tokens[i + 1].strip()
+                i += 1  # consome a data
+            
+            if dt_str and dt_str.lower() not in ["sem_data", "semdata", "none", "ilimitado", "0"]:
+                exp_iso, fmt_exib = processar_data_entrada(dt_str)
+                if exp_iso:
+                    emails_dict[em] = exp_iso
+                    adicionados.append(f"• `{em}` — Expira: *{fmt_exib}*")
+                else:
+                    erros_data.append(f"• `{em}` (Data inválida: `{dt_str}`)")
+            else:
+                emails_dict[em] = None
+                adicionados.append(f"• `{em}` — *Sem expiração*")
+            i += 1
+        else:
+            i += 1
+
+    if not adicionados and not erros_data:
+        await update.message.reply_text("⚠️ Nenhum e-mail válido foi identificado no comando.", parse_mode="Markdown")
+        return
 
     sucesso, detalhe_erro = salvar_cliente(target_id, emails_dict, cliente.get("permitir_sensivel", False))
-    
+
     if sucesso:
-        msg_data = f" (Expira em: `{data_formatada_exibicao}`)" if data_formatada_exibicao else " (Acesso vitalício/sem data)"
-        await update.message.reply_text(
-            f"✅ E-mail `{target_email}` cadastrado para o ID `{target_id}`{msg_data}!",
-            parse_mode="Markdown"
-        )
+        msg_resp = f"✅ **E-mail(s) cadastrado(s) com sucesso para o ID `{target_id}`!**\n\n"
+        if adicionados:
+            msg_resp += "\n".join(adicionados) + "\n"
+        if erros_data:
+            msg_resp += "\n⚠️ **Avisos de data inválida:**\n" + "\n".join(erros_data)
+        await update.message.reply_text(msg_resp, parse_mode="Markdown")
     else:
-        await update.message.reply_text(
-            f"❌ **Erro ao salvar no Supabase:**\n`{detalhe_erro}`\n\n"
-            "Verifique a variável `SUPABASE_URL` no Render e certifique-se de que não há barras soltas no final.",
-            parse_mode="Markdown"
-        )
+        await update.message.reply_text(f"❌ **Erro ao salvar no Supabase:**\n`{detalhe_erro}`", parse_mode="Markdown")
 
 async def editar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not eh_admin(update.effective_user.id):
@@ -617,7 +661,7 @@ def main():
     app.add_handler(CommandHandler("vip", vip_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, processar_mensagem_email))
 
-    logger.info("Bot operando com limpeza automática de URL no Supabase...")
+    logger.info("Bot operando com suporte a múltiplos e-mails no comando /autorizar...")
     app.run_polling()
 
 if __name__ == "__main__":
