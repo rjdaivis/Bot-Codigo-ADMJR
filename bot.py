@@ -27,11 +27,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Variáveis de Ambiente do Render
-TELEGRAM_TOKEN = os.getenv("TOKEN_TELEGRAM")
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-ADMIN_ID = os.getenv("ADMIN_ID")
+# Variáveis de Ambiente do Render (Com tratamento estrito de barra / no final)
+TELEGRAM_TOKEN = os.getenv("TOKEN_TELEGRAM", "").strip()
+RAW_SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
+RAW_SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()
+ADMIN_ID = os.getenv("ADMIN_ID", "").strip()
+
+# Trata a URL do Supabase removendo barras finais e aspas acidentais
+SUPABASE_URL = RAW_SUPABASE_URL.rstrip("/").strip("'").strip('"')
+SUPABASE_KEY = RAW_SUPABASE_KEY.strip("'").strip('"')
 
 if not TELEGRAM_TOKEN or not SUPABASE_URL or not SUPABASE_KEY:
     logger.error("ERRO: TOKEN_TELEGRAM, SUPABASE_URL ou SUPABASE_KEY não foram definidos no Render.")
@@ -40,7 +44,7 @@ if not TELEGRAM_TOKEN or not SUPABASE_URL or not SUPABASE_KEY:
 supabase: Client = None
 if SUPABASE_URL and SUPABASE_KEY:
     try:
-        supabase = create_client(SUPABASE_URL.strip(), SUPABASE_KEY.strip())
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     except Exception as e:
         logger.error(f"Erro ao inicializar cliente Supabase: {e}")
 
@@ -134,7 +138,7 @@ def obter_todos_clientes():
 def salvar_cliente(telegram_id: str, emails_dict: dict, permitir_sensivel: bool = False):
     """Salva ou atualiza os e-mails do cliente no Supabase. Retorna (sucesso, mensagem_erro)."""
     if not supabase:
-        return False, "Conexão com Supabase não foi iniciada. Verifique as variáveis de ambiente."
+        return False, "Conexão com Supabase não foi iniciada. Verifique as variáveis no Render."
     try:
         payload = {
             "telegram_id": str(telegram_id),
@@ -406,7 +410,7 @@ async def autorizar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(
             f"❌ **Erro ao salvar no Supabase:**\n`{detalhe_erro}`\n\n"
-            "Verifique as variáveis `SUPABASE_URL` e `SUPABASE_KEY` no Render.",
+            "Verifique a variável `SUPABASE_URL` no Render e certifique-se de que não há barras soltas no final.",
             parse_mode="Markdown"
         )
 
@@ -527,7 +531,7 @@ async def listar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 d_str = formatar_data_exibicao(exp)
                 texto += f"   └── `{em}` ({d_str})\n"
         else:
-            texto += "   └── *Sem e-emails vinculados*\n"
+            texto += "   └── *Sem e-mails vinculados*\n"
         texto += "\n"
 
     if len(texto) > 4000:
@@ -613,7 +617,7 @@ def main():
     app.add_handler(CommandHandler("vip", vip_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, processar_mensagem_email))
 
-    logger.info("Bot operando com exibição detalhada de erros...")
+    logger.info("Bot operando com limpeza automática de URL no Supabase...")
     app.run_polling()
 
 if __name__ == "__main__":
