@@ -3,7 +3,6 @@ import re
 import json
 import imaplib
 import email
-import html
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from email.header import decode_header
@@ -34,7 +33,7 @@ RAW_SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
 RAW_SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()
 ADMIN_ID = os.getenv("ADMIN_ID", "").strip()
 
-# Trata a URL do Supabase removendo barras finais e aspas acidentais
+# Trata a URL do Supabase garantindo formato correto
 SUPABASE_URL = RAW_SUPABASE_URL.rstrip("/").strip("'").strip('"')
 SUPABASE_KEY = RAW_SUPABASE_KEY.strip("'").strip('"')
 
@@ -81,10 +80,7 @@ def eh_admin(user_id) -> bool:
     return str(user_id) == str(ADMIN_ID)
 
 def processar_data_entrada(data_str: str):
-    """
-    Tenta converter a data inserida (DD-MM-AAAA, DD/MM/AAAA, DD-MM-AA)
-    para formato ISO de armazenamento.
-    """
+    """Converte a data de entrada (DD-MM-AAAA) para o banco e retorna formatada."""
     formatos = ["%d-%m-%Y", "%d/%m/%Y", "%d-%m-%y", "%d/%m/%y"]
     for fmt in formatos:
         try:
@@ -95,7 +91,7 @@ def processar_data_entrada(data_str: str):
     return None, None
 
 def formatar_data_exibicao(iso_str: str) -> str:
-    """Converte uma string ISO para DD-MM-AAAA para exibição no Telegram."""
+    """Converte a data salva no banco para exibição no formato DD-MM-AAAA."""
     if not iso_str:
         return "Sem expiração"
     try:
@@ -109,37 +105,37 @@ def formatar_data_exibicao(iso_str: str) -> str:
             return iso_str
 
 # ==========================================
-# BANCO DE DADOS (SUPABASE) & MIGRAÇÃO
+# BANCO DE DADOS (SUPABASE)
 # ==========================================
 
 def obter_cliente(telegram_id: str):
     """Busca os dados de um cliente no Supabase pelo Telegram ID."""
     if not supabase:
-        return None, "Cliente Supabase não inicializado (Verifique URL/KEY)."
+        return None, "Conexão com Supabase não configurada."
     try:
         response = supabase.table("clientes_bot").select("*").eq("telegram_id", str(telegram_id)).execute()
         if response.data:
             return response.data[0], None
         return {}, None
     except Exception as e:
-        logger.error(f"Erro ao obter cliente {telegram_id} no Supabase: {e}")
+        logger.error(f"Erro ao obter cliente {telegram_id}: {e}")
         return None, str(e)
 
 def obter_todos_clientes():
     """Busca todos os clientes cadastrados no Supabase."""
     if not supabase:
-        return None, "Cliente Supabase não inicializado (Verifique URL/KEY)."
+        return None, "Conexão com Supabase não configurada."
     try:
         response = supabase.table("clientes_bot").select("*").execute()
         return response.data, None
     except Exception as e:
-        logger.error(f"Erro ao obter todos os clientes do Supabase: {e}")
+        logger.error(f"Erro ao obter todos os clientes: {e}")
         return None, str(e)
 
 def salvar_cliente(telegram_id: str, emails_dict: dict, permitir_sensivel: bool = False):
-    """Salva ou atualiza os e-mails do cliente no Supabase. Retorna (sucesso, mensagem_erro)."""
+    """Salva ou atualiza os e-mails e permissões do cliente no Supabase."""
     if not supabase:
-        return False, "Conexão com Supabase não foi iniciada. Verifique as variáveis no Render."
+        return False, "Conexão com Supabase não foi iniciada."
     try:
         payload = {
             "telegram_id": str(telegram_id),
@@ -148,49 +144,14 @@ def salvar_cliente(telegram_id: str, emails_dict: dict, permitir_sensivel: bool 
             "updated_at": datetime.utcnow().isoformat()
         }
         supabase.table("clientes_bot").upsert(payload).execute()
-        logger.info(f"Cliente {telegram_id} salvo com sucesso no Supabase.")
         return True, None
     except Exception as e:
         err_msg = str(e)
-        logger.error(f"Erro ao salvar cliente {telegram_id} no Supabase: {err_msg}")
+        logger.error(f"Erro ao salvar cliente {telegram_id}: {err_msg}")
         return False, err_msg
 
-def migrar_json_para_supabase():
-    """Lê o arquivo clientes.json do GitHub e importa tudo para o Supabase se ainda não existir."""
-    caminho_json = "clientes.json"
-    if os.path.exists(caminho_json):
-        try:
-            with open(caminho_json, "r", encoding="utf-8") as f:
-                dados = json.load(f)
-            
-            logger.info("Verificando migração do clientes.json para o Supabase...")
-            for telegram_id, info in dados.items():
-                cliente_existente, _ = obter_cliente(str(telegram_id))
-                if not cliente_existente:
-                    if isinstance(info, dict):
-                        emails = info.get("emails", {})
-                        if isinstance(emails, list):
-                            emails = {e: None for e in emails}
-                        permitir = info.get("permitir_sensivel", False)
-                    elif isinstance(info, list):
-                        emails = {e: None for e in info}
-                        permitir = False
-                    else:
-                        continue
-
-                    salvar_cliente(str(telegram_id), emails, permitir)
-
-            logger.info("✅ Checagem/Migração do clientes.json concluída!")
-        except Exception as e:
-            logger.error(f"Erro na migração do clientes.json: {e}")
-
 def validar_email_estrito(telegram_id: str, email_informado: str) -> bool:
-    """
-    REGRA DE VALIDAÇÃO DE ACESSO:
-    1. Administrador (ADMIN_ID): Acesso ilimitado a qualquer e-mail.
-    2. Cliente VIP (permitir_sensivel = True): Acesso ilimitado a qualquer e-mail.
-    3. Cliente Comum: Exige vínculo do e-mail exato e verificação de expiração.
-    """
+    """Valida permissão estrita por string exata e data de expiração."""
     if eh_admin(telegram_id):
         return True
 
@@ -216,14 +177,14 @@ def validar_email_estrito(telegram_id: str, email_informado: str) -> bool:
     return False
 
 # ==========================================
-# MOTOR DE BUSCA EM CONTAS (CONTAS.JSON)
+# MOTOR ORIGINAL DE BUSCA EM CONTAS (CONTAS.JSON)
 # ==========================================
 
 def carregar_contas_email() -> list:
-    """Lê as contas de e-mail e senhas salvas no arquivo contas.json do GitHub."""
+    """Lê as contas de e-mail e senhas salvas no arquivo contas.json."""
     caminho_contas = "contas.json"
     if not os.path.exists(caminho_contas):
-        logger.warning("Arquivo contas.json não encontrado no repositório.")
+        logger.warning("Arquivo contas.json não encontrado.")
         return []
 
     try:
@@ -254,19 +215,6 @@ def carregar_contas_email() -> list:
         logger.error(f"Erro ao ler contas.json: {e}")
         return []
 
-def decodificar_texto_cabecalho(valor_cabecalho: str) -> str:
-    """Decodifica cabeçalhos completos de e-mail (Assunto/From) sem truncar partes UTF-8."""
-    if not valor_cabecalho:
-        return ""
-    partes = decode_header(valor_cabecalho)
-    resultado = ""
-    for conteudo, enc in partes:
-        if isinstance(conteudo, bytes):
-            resultado += conteudo.decode(enc or "utf-8", errors="ignore")
-        elif isinstance(conteudo, str):
-            resultado += conteudo
-    return resultado
-
 def extrair_corpo_email(msg) -> str:
     """Extrai o texto/HTML completo de uma mensagem de e-mail."""
     corpo = ""
@@ -284,65 +232,17 @@ def extrair_corpo_email(msg) -> str:
             corpo = payload.decode("utf-8", errors="ignore")
     return corpo
 
-def extrair_codigo_disney(texto_bruto: str) -> str:
-    """Extrai o código numérico de 6 dígitos da Disney+ com limpeza completa de HTML."""
-    if not texto_bruto:
-        return None
-
-    texto = html.unescape(texto_bruto)
-    texto_limpo = re.sub(r'<[^>]+>', ' ', texto)
-    texto_limpo = re.sub(r'[\xa0\s\t\n\r]+', ' ', texto_limpo)
-
-    m_direto = re.findall(r'\b\d{6}\b', texto_limpo)
-    if m_direto:
-        return m_direto[0]
-
-    m_espacado = re.findall(r'\b(?:\d[\s-]*){6}\b', texto_limpo)
-    for item in m_espacado:
-        digitos = re.sub(r'\D', '', item)
-        if len(digitos) == 6:
-            return digitos
-
-    return None
-
-def buscar_codigos_streaming(email_destino: str) -> tuple[list, list]:
-    """
-    Varre as caixas de entrada do contas.json decodificando assuntos completos
-    e extraindo códigos/links de streamings. Retorna (resultados, mensagens_erro).
-    """
+def buscar_codigos_streaming(email_destino: str) -> list:
+    """Motor original e direto de busca de códigos/links nos e-mails."""
     contas = carregar_contas_email()
     if not contas:
-        return [], ["⚠️ Nenhuma conta de e-mail foi encontrada no arquivo `contas.json`."]
+        return ["⚠️ Nenhuma conta de e-mail foi encontrada no arquivo `contas.json`."]
 
     resultados = []
-    erros_conexao = []
 
-    # Prepara versão sem pontos do e-mail digitado
-    partes_cli = email_destino.split("@")
-    user_cli = partes_cli[0].replace(".", "").lower()
-    domain_cli = partes_cli[1].lower() if len(partes_cli) > 1 else "gmail.com"
-    email_cli_sem_pontos = f"{user_cli}@{domain_cli}"
-
-    contas_priorizadas = []
-    outras_contas = []
-
-    for c in contas:
-        u = c.get("user", "")
-        u_partes = u.split("@")
-        u_user = u_partes[0].replace(".", "").lower()
-        u_domain = u_partes[1].lower() if len(u_partes) > 1 else "gmail.com"
-        u_sem_pontos = f"{u_user}@{u_domain}"
-
-        if u_sem_pontos == email_cli_sem_pontos:
-            contas_priorizadas.insert(0, c)
-        else:
-            outras_contas.append(c)
-
-    lista_contas = contas_priorizadas + outras_contas
-
-    for conta in lista_contas:
-        imap_user = conta.get("user", "")
-        imap_pass = conta.get("pass", "")
+    for conta in contas:
+        imap_user = conta.get("user")
+        imap_pass = conta.get("pass")
         imap_server = conta.get("server", "imap.gmail.com")
 
         if not imap_user or not imap_pass:
@@ -353,13 +253,16 @@ def buscar_codigos_streaming(email_destino: str) -> tuple[list, list]:
             mail.login(imap_user, imap_pass)
             mail.select("inbox")
 
-            status, messages = mail.search(None, 'ALL')
-            if status != "OK" or not messages or not messages[0]:
+            status, messages = mail.search(None, f'(TO "{email_destino}")')
+            if status != "OK" or not messages[0]:
+                status, messages = mail.search(None, f'TEXT "{email_destino}"')
+
+            if not messages[0]:
                 mail.logout()
                 continue
 
             id_list = messages[0].split()
-            ultimos_ids = id_list[-20:]
+            ultimos_ids = id_list[-5:]
 
             for msg_id in reversed(ultimos_ids):
                 res, msg_data = mail.fetch(msg_id, "(RFC822)")
@@ -369,68 +272,52 @@ def buscar_codigos_streaming(email_destino: str) -> tuple[list, list]:
                 for response_part in msg_data:
                     if isinstance(response_part, tuple):
                         msg = email.message_from_bytes(response_part[1])
+                        assunto, encoding = decode_header(msg.get("Subject", ""))[0]
+                        if isinstance(assunto, bytes):
+                            assunto = assunto.decode(encoding or "utf-8", errors="ignore")
                         
-                        assunto = decodificar_texto_cabecalho(msg.get("Subject", "")).lower()
-                        remetente = decodificar_texto_cabecalho(msg.get("From", "")).lower()
                         corpo = extrair_corpo_email(msg)
 
-                        # 1. DISNEY+
-                        if "disney" in remetente or "disney" in assunto:
-                            codigo = extrair_codigo_disney(corpo)
-                            if codigo:
-                                item_res = f"✨ **Disney+**: Seu código de acesso é **{codigo}**"
-                                if item_res not in resultados:
-                                    resultados.append(item_res)
+                        # 1. DISNEY+ (Código numérico de 6 dígitos)
+                        if "disney" in msg.get("From", "").lower() or "disney" in assunto.lower():
+                            codigos_disney = re.findall(r'\b\d{6}\b', corpo)
+                            if codigos_disney:
+                                resultados.append(f"✨ **Disney+**: Seu código de acesso é **{codigos_disney[0]}**")
 
                         # 2. NETFLIX
-                        elif "netflix" in remetente or "netflix" in assunto:
+                        elif "netflix" in msg.get("From", "").lower() or "netflix" in assunto.lower():
                             links_netflix = re.findall(r'https?://[^\s<>"]+netflix\.com[^\s<>"]+', corpo)
                             codigos_netflix = re.findall(r'\b\d{4,8}\b', corpo)
 
                             if links_netflix:
-                                item_res = f"🔴 **Netflix (Link)**: [Clique aqui para confirmar/acessar]({links_netflix[0]})"
-                                if item_res not in resultados:
-                                    resultados.append(item_res)
+                                resultados.append(f"🔴 **Netflix (Link)**: [Clique aqui para confirmar/acessar]({links_netflix[0]})")
                             elif codigos_netflix:
-                                item_res = f"🔴 **Netflix (Código)**: **{codigos_netflix[0]}**"
-                                if item_res not in resultados:
-                                    resultados.append(item_res)
+                                resultados.append(f"🔴 **Netflix (Código)**: **{codigos_netflix[0]}**")
 
                         # 3. HBO MAX / MAX
-                        elif "hbo" in remetente or "max" in remetente or "max" in assunto:
+                        elif "hbo" in msg.get("From", "").lower() or "max" in msg.get("From", "").lower() or "max" in assunto.lower():
                             links_hbo = re.findall(r'https?://[^\s<>"]+(?:max|hbomax)\.com[^\s<>"]+', corpo)
                             if links_hbo:
-                                item_res = f"🟣 **HBO Max / MAX**: [Clique aqui para acessar/redefinir]({links_hbo[0]})"
-                                if item_res not in resultados:
-                                    resultados.append(item_res)
+                                resultados.append(f"🟣 **HBO Max / MAX**: [Clique aqui para acessar/redefinir]({links_hbo[0]})")
 
                         # 4. GLOBO / GLOBOPLAY
-                        elif "globo" in remetente or "globo" in assunto:
+                        elif "globo" in msg.get("From", "").lower() or "globo" in assunto.lower():
                             links_globo = re.findall(r'https?://[^\s<>"]+globo\.com[^\s<>"]+', corpo)
                             if links_globo:
-                                item_res = f"🔵 **Globo / Globoplay**: [Clique aqui para acessar/redefinir]({links_globo[0]})"
-                                if item_res not in resultados:
-                                    resultados.append(item_res)
+                                resultados.append(f"🔵 **Globo / Globoplay**: [Clique aqui para acessar/redefinir]({links_globo[0]})")
 
             mail.logout()
-
-            if resultados and conta in contas_priorizadas:
-                break
-
         except Exception as e:
-            err_str = str(e)
-            logger.error(f"Erro ao consultar conta {imap_user}: {err_str}")
-            if conta in contas_priorizadas:
-                erros_conexao.append(f"⚠️ **Erro de login no e-mail `{imap_user}`:**\n`{err_str}`\n*Certifique-se de usar uma Senha de App do Google e ativar o IMAP nas configurações do Gmail.*")
+            logger.error(f"Erro ao consultar conta {imap_user}: {e}")
 
-    return resultados, erros_conexao
+    return resultados
 
 # ==========================================
 # COMANDOS DO BOT TELEGRAM
 # ==========================================
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando inicial do bot."""
+    """Comando inicial do bot orientando primeiro acesso."""
     user_id = update.effective_user.id
     texto = (
         "👋 **Bem-vindo ao Bot de Atendimento de Streamings!**\n\n"
@@ -452,9 +339,8 @@ async def autorizar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
         await update.message.reply_text(
             "Uso correto:\n"
-            "• **Único:** `/autorizar <telegram_id> <email> [DD-MM-AAAA]`\n"
-            "• **Múltiplos:** `/autorizar <telegram_id> email1 DD-MM-AAAA email2 DD-MM-AAAA`\n"
-            "• **Formato com :** `/autorizar <telegram_id> email1:DD-MM-AAAA email2:DD-MM-AAAA`",
+            "• `/autorizar <telegram_id> <email> [DD-MM-AAAA]`\n"
+            "• `/autorizar <telegram_id> email1:DD-MM-AAAA email2:DD-MM-AAAA`",
             parse_mode="Markdown"
         )
         return
@@ -690,14 +576,11 @@ async def processar_mensagem_email(update: Update, context: ContextTypes.DEFAULT
             parse_mode="Markdown"
         )
         
-        resultados, erros_conexao = buscar_codigos_streaming(email_recebido)
+        resultados = buscar_codigos_streaming(email_recebido)
 
         if resultados:
             resposta = "📬 **Resultados encontrados:**\n\n" + "\n\n".join(resultados)
             await msg_wait.edit_text(resposta, parse_mode="Markdown", disable_web_page_preview=True)
-        elif erros_conexao:
-            resposta = "\n\n".join(erros_conexao)
-            await msg_wait.edit_text(resposta, parse_mode="Markdown")
         else:
             await msg_wait.edit_text(
                 f"ℹ️ Nenhum código ou link recente foi encontrado para `{email_recebido}` nos últimos minutos.\n\n"
@@ -722,7 +605,6 @@ def main():
         raise ValueError("TOKEN_TELEGRAM não configurado nas variáveis do ambiente.")
 
     threading.Thread(target=iniciar_servidor_web, daemon=True).start()
-    migrar_json_para_supabase()
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
@@ -734,7 +616,7 @@ def main():
     app.add_handler(CommandHandler("vip", vip_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, processar_mensagem_email))
 
-    logger.info("Bot operando com diagnósticos IMAP ativados e extrator HTML Disney+ atualizado...")
+    logger.info("Bot operando com motor original restaurado e banco Supabase em DD-MM-AAAA...")
     app.run_polling()
 
 if __name__ == "__main__":
