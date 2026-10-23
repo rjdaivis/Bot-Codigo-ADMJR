@@ -234,56 +234,56 @@ def extrair_apenas_texto_visivel(html_str: str) -> str:
 def limpar_url_link(link: str) -> str:
     if not link:
         return ""
-    # Remove qualquer quebra de linha ou espaço em branco interno
-    link_limpo = re.sub(r'[\r\n\t ]+', '', str(link))
-    link_limpo = html.unescape(link_limpo)
-    link_limpo = link_limpo.replace("&amp;", "&").replace("&#x3D;", "=")
+    # Remove rigorosamente qualquer espaço em branco, quebra de linha ou tabulação
+    link_limpo = html.unescape(str(link))
+    link_limpo = re.sub(r'[\r\n\t\s]+', '', link_limpo)
+    link_limpo = link_limpo.replace("&amp;", "&").replace("&#x3D;", "=").replace("&quot;", '"')
     return link_limpo.strip()
 
 def extrair_link_netflix_html(corpo_html: str, tipo: str = "geral") -> str:
     if not corpo_html:
         return ""
-    bloqueadas = ["unsubscribe", "help.netflix.com", "privacy", "terms", "facebook", "twitter"]
+    bloqueadas = ["unsubscribe", "help.netflix.com", "privacy", "terms", "facebook", "twitter", "instagram"]
 
-    # 1. PRIORIDADE MÁXIMA: Buscar a tag <a> associada ao botão "Sim, fui eu" ou "Atualizar residência"
+    # 1. BUSCA POR TEXTO EXATO DO BOTÃO DA NETFLIX
     anchors = re.findall(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', corpo_html, re.IGNORECASE | re.DOTALL)
-    for href, inner_html in anchors:
-        texto_botao = re.sub(r'<[^>]+>', ' ', inner_html).strip().lower()
-        if tipo == "residencia" and any(p in texto_botao for p in ["sim, fui eu", "fui eu", "atualizar residência", "confirmar residência", "atualizar residencia"]):
-            link_limpo = limpar_url_link(href)
-            if "netflix.com" in link_limpo.lower() and not any(x in link_limpo.lower() for x in bloqueadas):
-                return link_limpo
-        elif tipo == "viagem" and any(p in texto_botao for p in ["receber código", "receber codigo", "solicitar código", "solicitar codigo", "estou viajando"]):
-            link_limpo = limpar_url_link(href)
-            if "netflix.com" in link_limpo.lower() and not any(x in link_limpo.lower() for x in bloqueadas):
-                return link_limpo
+    
+    if tipo == "viagem":
+        for href, inner_html in anchors:
+            texto_botao = re.sub(r'<[^>]+>', ' ', inner_html).strip().lower()
+            if any(p in texto_botao for p in ["receber código", "receber codigo", "solicitar código", "solicitar codigo", "obter código", "obter codigo", "estou viajando"]):
+                l_limpo = limpar_url_link(href)
+                if "netflix.com" in l_limpo.lower() and not any(x in l_limpo.lower() for x in bloqueadas):
+                    return l_limpo
 
-    # 2. SEGUNDA PRIORIDADE: Links com nftoken/accountaccess capturados estritamente entre aspas "..."
+    if tipo == "residencia":
+        for href, inner_html in anchors:
+            texto_botao = re.sub(r'<[^>]+>', ' ', inner_html).strip().lower()
+            if any(p in texto_botao for p in ["sim, fui eu", "fui eu", "atualizar residência", "confirmar residência", "atualizar residencia"]):
+                l_limpo = limpar_url_link(href)
+                if "netflix.com" in l_limpo.lower() and not any(x in l_limpo.lower() for x in bloqueadas):
+                    return l_limpo
+
+    # 2. BUSCA POR ESTRUTURA DA URL (ACCOUNT/TRAVEL OU UPDATE-PRIMARY-LOCATION)
     raw_matches = re.findall(r'href=["\']([^"\']+)["\']', corpo_html, re.IGNORECASE)
-    cleaned_links = []
-    for raw in raw_matches:
-        l_limpo = limpar_url_link(raw)
-        if "netflix.com" in l_limpo.lower():
-            cleaned_links.append(l_limpo)
+    cleaned_links = [limpar_url_link(m) for m in raw_matches if "netflix.com" in m.lower()]
 
-    nftoken_links = [l for l in cleaned_links if ("nftoken=" in l.lower() or "accountaccess" in l.lower()) and not any(b in l.lower() for b in bloqueadas)]
-    if nftoken_links:
-        if tipo == "residencia":
-            for l in nftoken_links:
-                if any(k in l.lower() for k in ["update-primary-location", "household", "confirm", "primary-location"]):
-                    return l
-        elif tipo == "viagem":
-            for l in nftoken_links:
-                if any(k in l.lower() for k in ["travel", "accountaccess", "verify"]):
-                    return l
-        return nftoken_links[0]
-
-    # 3. FALLBACK: Outros links válidos da Netflix
-    for l in cleaned_links:
-        l_lower = l.lower()
-        if not any(b in l_lower for b in bloqueadas + ["/login", "/browse"]):
-            if any(act in l_lower for act in ["update", "location", "travel", "confirm", "verify", "accountaccess"]):
+    if tipo == "viagem":
+        for l in cleaned_links:
+            l_lower = l.lower()
+            if ("travel" in l_lower or "verify" in l_lower) and not any(b in l_lower for b in bloqueadas):
                 return l
+
+    if tipo == "residencia":
+        for l in cleaned_links:
+            l_lower = l.lower()
+            if ("update-primary-location" in l_lower or "household" in l_lower) and not any(b in l_lower for b in bloqueadas):
+                return l
+
+    # 3. FALLBACK DE LINK COM TOKEN
+    for l in cleaned_links:
+        if "nftoken=" in l.lower() and not any(b in l.lower() for b in bloqueadas):
+            return l
 
     return ""
 
@@ -436,22 +436,13 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     mail.logout()
                     return f"✅ <b>Código de Acesso Netflix Encontrado!</b>\n\n🔑 Seu código é: <code>{codigo_valido}</code>\n\n⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
 
-            # 3. NETFLIX: CONFIRMAÇÃO DIRETA DE RESIDÊNCIA ("Sim, fui eu")
-            if eh_netflix and any(p in assunto_lower or p in corpo_texto_puro.lower() for p in ["como atualizar sua residência", "como atualizar sua residencia", "você pediu para atualizar", "voce pediu para atualizar", "atualizar sua residência", "atualizar residencia", "confirme seu endereço", "residência netflix", "residencia netflix"]):
-                link_residencia = extrair_link_netflix_html(corpo_html, tipo="residencia")
-                if link_residencia:
-                    mail.close()
-                    mail.logout()
-                    return (
-                        f"✅ <b>Link de Confirmação de Residência Netflix Encontrado!</b>\n\n"
-                        f"👉 <a href=\"{link_residencia}\">Clique aqui para confirmar no botão (Sim, fui eu)</a>\n\n"
-                        f"🔗 <b>URL Completa:</b>\n<code>{link_residencia}</code>\n\n"
-                        f"💡 <i><b>Aviso do Celular:</b> Se abrir a tela 'A Netflix fica melhor com o app', clique nos 3 pontinhos do navegador e marque <b>'Versão para Computador' (Desktop)</b>.</i>\n\n"
-                        f"⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
-                    )
-
-            # 4. NETFLIX: CÓDIGO TEMPORÁRIO / VIAJANDO ("Receber código")
-            if eh_netflix and any(p in assunto_lower or p in corpo_texto_puro.lower() for p in ["código de acesso temporário", "codigo de acesso temporario", "fora da sua residência", "fora da sua residencia", "estou viajando", "código de viagem", "codigo de viagem", "acesso temporário", "acesso temporario", "receber código", "receber codigo", "solicitar código"]):
+            # 3. NETFLIX: CÓDIGO TEMPORÁRIO / VIAJANDO / RECEBER CÓDIGO (CHECADO PRIMEIRO PARA EVITAR CONFUSÃO COM RESIDÊNCIA)
+            eh_viagem_netflix = any(p in assunto_lower or p in corpo_texto_puro.lower() for p in [
+                "código de acesso temporário", "codigo de acesso temporario", "fora da sua residência", "fora da sua residencia",
+                "estou viajando", "código de viagem", "codigo de viagem", "acesso temporário", "acesso temporario",
+                "receber código", "receber codigo", "solicitar código", "solicitar codigo", "obter código", "obter codigo"
+            ])
+            if eh_netflix and eh_viagem_netflix:
                 link_viagem = extrair_link_netflix_html(corpo_html, tipo="viagem")
                 codigos = re.findall(r'\b\d{4,6}\b', corpo_texto_puro)
                 codigo_valido = next((c for c in codigos if not c.startswith("0800") and c != "2026"), None)
@@ -459,16 +450,32 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     mail.close()
                     mail.logout()
                     return (
-                        f"✅ <b>Link de Acesso Temporário / Residência (Netflix)!</b>\n\n"
+                        f"✅ <b>Link de Acesso Temporário / Viagem (Netflix)!</b>\n\n"
                         f"👉 <a href=\"{link_viagem}\">Clique aqui para gerar/receber o código no site da Netflix</a>\n\n"
-                        f"🔗 <b>URL Completa:</b>\n<code>{link_viagem}</code>\n\n"
-                        f"💡 <i><b>Importante para Celular:</b> Se abrir a tela 'A Netflix fica melhor com o app', toque nos 3 pontinhos do navegador do celular e ative <b>'Versão para Computador' (Desktop)</b> para que o código de 4 dígitos apareça na tela.</i>\n\n"
+                        f"💡 <i><b>Importante para Celular:</b> Se abrir a tela 'A Netflix fica melhor com o app', toque nos 3 pontinhos do navegador do celular e ative <b>'Versão para Computador' (Desktop)</b> para que o código apareça.</i>\n\n"
                         f"⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
                     )
                 elif codigo_valido:
                     mail.close()
                     mail.logout()
                     return f"✅ <b>Código de Viagem / Acesso Netflix Encontrado!</b>\n\n🔑 Seu código é: <code>{codigo_valido}</code>\n\n⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
+
+            # 4. NETFLIX: CONFIRMAÇÃO DIRETA DE RESIDÊNCIA ("Sim, fui eu" / "Atualizar residência")
+            eh_residencia_netflix = any(p in assunto_lower or p in corpo_texto_puro.lower() for p in [
+                "como atualizar sua residência", "como atualizar sua residencia", "você pediu para atualizar",
+                "voce pediu para atualizar", "atualizar sua residência", "atualizar residencia", "confirme seu endereço"
+            ])
+            if eh_netflix and eh_residencia_netflix:
+                link_residencia = extrair_link_netflix_html(corpo_html, tipo="residencia")
+                if link_residencia:
+                    mail.close()
+                    mail.logout()
+                    return (
+                        f"✅ <b>Link de Confirmação de Residência Netflix Encontrado!</b>\n\n"
+                        f"👉 <a href=\"{link_residencia}\">Clique aqui para confirmar no botão (Sim, fui eu)</a>\n\n"
+                        f"💡 <i><b>Aviso do Celular:</b> Se abrir a tela 'A Netflix fica melhor com o app', clique nos 3 pontinhos do navegador e marque <b>'Versão para Computador' (Desktop)</b>.</i>\n\n"
+                        f"⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
+                    )
 
             # 5. CÓDIGO NUMÉRICO DE ENTRADA / ACESSO GERAL
             eh_email_codigo = any(p in assunto_lower for p in ["código", "codigo", "temporário", "temporario", "autorização", "autorizacao", "verificação", "verificacao"])
@@ -504,7 +511,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     return (
                         f"✅ <b>Link de Redefinição/Alteração de Senha Encontrado!</b>\n\n"
                         f"👉 <a href=\"{link_vip}\">Clique aqui para redefinir sua senha</a>\n\n"
-                        f"🔗 <b>URL Completa:</b>\n<code>{link_vip}</code>\n\n"
                         f"⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
                     )
 
@@ -527,7 +533,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                 return (
                     f"✅ <b>Link Encontrado!</b>\n\n"
                     f"👉 <a href=\"{link_encontrado}\">Clique aqui para acessar</a>\n\n"
-                    f"🔗 <b>URL Completa:</b>\n<code>{link_encontrado}</code>\n\n"
                     f"⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
                 )
 
@@ -906,7 +911,7 @@ def main():
             app.add_handler(CommandHandler("listar", listar_clientes))
             app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receber_mensagem_email))
 
-            print("🤖 Bot iniciado e rodando no Render com correção na extração de links da Netflix...")
+            print("🤖 Bot iniciado e rodando no Render com mensagens limpas e links 100% precisos...")
             app.run_polling(poll_interval=1.0, timeout=20)
         except Exception as e:
             logging.error(f"Ocorreu uma queda temporária no Bot: {e}. Reconectando em 5 segundos...")
