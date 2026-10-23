@@ -234,8 +234,9 @@ def extrair_apenas_texto_visivel(html_str: str) -> str:
 def limpar_url_link(link: str) -> str:
     if not link:
         return ""
-    link_limpo = html.unescape(link)
-    link_limpo = re.sub(r'[\r\n\t ]+', '', link_limpo)
+    # Remove qualquer quebra de linha ou espaço em branco interno
+    link_limpo = re.sub(r'[\r\n\t ]+', '', str(link))
+    link_limpo = html.unescape(link_limpo)
     link_limpo = link_limpo.replace("&amp;", "&").replace("&#x3D;", "=")
     return link_limpo.strip()
 
@@ -244,12 +245,24 @@ def extrair_link_netflix_html(corpo_html: str, tipo: str = "geral") -> str:
         return ""
     bloqueadas = ["unsubscribe", "help.netflix.com", "privacy", "terms", "facebook", "twitter"]
 
-    raw_matches = re.findall(r'href=["\']?([^"\'\s>]+)["\']?', corpo_html, re.IGNORECASE)
+    # 1. PRIORIDADE MÁXIMA: Buscar a tag <a> associada ao botão "Sim, fui eu" ou "Atualizar residência"
+    anchors = re.findall(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', corpo_html, re.IGNORECASE | re.DOTALL)
+    for href, inner_html in anchors:
+        texto_botao = re.sub(r'<[^>]+>', ' ', inner_html).strip().lower()
+        if tipo == "residencia" and any(p in texto_botao for p in ["sim, fui eu", "fui eu", "atualizar residência", "confirmar residência", "atualizar residencia"]):
+            link_limpo = limpar_url_link(href)
+            if "netflix.com" in link_limpo.lower() and not any(x in link_limpo.lower() for x in bloqueadas):
+                return link_limpo
+        elif tipo == "viagem" and any(p in texto_botao for p in ["receber código", "receber codigo", "solicitar código", "solicitar codigo", "estou viajando"]):
+            link_limpo = limpar_url_link(href)
+            if "netflix.com" in link_limpo.lower() and not any(x in link_limpo.lower() for x in bloqueadas):
+                return link_limpo
+
+    # 2. SEGUNDA PRIORIDADE: Links com nftoken/accountaccess capturados estritamente entre aspas "..."
+    raw_matches = re.findall(r'href=["\']([^"\']+)["\']', corpo_html, re.IGNORECASE)
     cleaned_links = []
     for raw in raw_matches:
-        l_limpo = html.unescape(raw)
-        l_limpo = re.sub(r'[\r\n\t ]+', '', l_limpo)
-        l_limpo = l_limpo.replace("&amp;", "&").replace("&#x3D;", "=")
+        l_limpo = limpar_url_link(raw)
         if "netflix.com" in l_limpo.lower():
             cleaned_links.append(l_limpo)
 
@@ -258,28 +271,19 @@ def extrair_link_netflix_html(corpo_html: str, tipo: str = "geral") -> str:
         if tipo == "residencia":
             for l in nftoken_links:
                 if any(k in l.lower() for k in ["update-primary-location", "household", "confirm", "primary-location"]):
-                    return limpar_url_link(l)
+                    return l
         elif tipo == "viagem":
             for l in nftoken_links:
                 if any(k in l.lower() for k in ["travel", "accountaccess", "verify"]):
-                    return limpar_url_link(l)
-        return limpar_url_link(nftoken_links[0])
+                    return l
+        return nftoken_links[0]
 
-    anchors = re.findall(r'<a\s+[^>]*href=["\']?([^"\'\s>]+)["\']?[^>]*>(.*?)</a>', corpo_html, re.IGNORECASE | re.DOTALL)
-    for href, inner_html in anchors:
-        texto_botao = re.sub(r'<[^>]+>', ' ', inner_html).strip().lower()
-        if tipo == "residencia" and any(p in texto_botao for p in ["sim, fui eu", "fui eu", "atualizar residência", "confirmar residência", "atualizar residencia"]):
-            if "netflix.com" in href.lower() and not any(x in href.lower() for x in bloqueadas):
-                return limpar_url_link(href)
-        elif tipo == "viagem" and any(p in texto_botao for p in ["receber código", "receber codigo", "solicitar código", "solicitar codigo", "estou viajando"]):
-            if "netflix.com" in href.lower() and not any(x in href.lower() for x in bloqueadas):
-                return limpar_url_link(href)
-
+    # 3. FALLBACK: Outros links válidos da Netflix
     for l in cleaned_links:
         l_lower = l.lower()
         if not any(b in l_lower for b in bloqueadas + ["/login", "/browse"]):
             if any(act in l_lower for act in ["update", "location", "travel", "confirm", "verify", "accountaccess"]):
-                return limpar_url_link(l)
+                return l
 
     return ""
 
@@ -546,7 +550,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 # ==========================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id).strip()
-    # Não salva automaticamente o cliente sem e-mails liberados no banco de dados
     await update.message.reply_text(
         f"👋 <b>Central de Liberação de Códigos</b>\n\n"
         f"🆔 <b>Seu ID do Telegram:</b> <code>{user_id}</code>\n\n"
@@ -569,7 +572,6 @@ async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         hoje = datetime.now().date()
 
-        # Aceita tanto quantidade de dias (ex: 30) quanto data direta (ex: 05-11-2026)
         if arg_terceiro.isdigit():
             dias = int(arg_terceiro)
             dt_expira = hoje + timedelta(days=dias)
@@ -601,7 +603,6 @@ async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if "emails_permitidos" not in clientes[user_id_cliente]:
             clientes[user_id_cliente]["emails_permitidos"] = {}
 
-        # Gravação ESTRITA da grafia exata do e-mail digitado
         clientes[user_id_cliente]["emails_permitidos"][email_cliente_raw] = data_validade_banco
 
         salvar_json("clientes.json", clientes)
@@ -905,7 +906,7 @@ def main():
             app.add_handler(CommandHandler("listar", listar_clientes))
             app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receber_mensagem_email))
 
-            print("🤖 Bot iniciado e rodando no Render com suporte flexível a datas e dias no /autorizar...")
+            print("🤖 Bot iniciado e rodando no Render com correção na extração de links da Netflix...")
             app.run_polling(poll_interval=1.0, timeout=20)
         except Exception as e:
             logging.error(f"Ocorreu uma queda temporária no Bot: {e}. Reconectando em 5 segundos...")
