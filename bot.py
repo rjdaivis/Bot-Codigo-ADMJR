@@ -3,7 +3,6 @@ import re
 import json
 import time
 import html
-import quopri
 import socket
 import imaplib
 import email
@@ -13,6 +12,7 @@ from threading import Thread
 from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
 from email.header import decode_header
+from html.parser import HTMLParser
 
 from flask import Flask
 from supabase import create_client, Client
@@ -61,7 +61,46 @@ CLIENTES_FIXOS_PADRAO = {
 }
 
 # ==========================================
-# FUNÇÕES AUXILIARES DE TRATAMENTO DE DATAS
+# PARSER ESTRUTURADO DE HTML
+# ==========================================
+class HTMLExtractor(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.anchors = []
+        self.in_anchor = False
+        self.current_href = ""
+        self.current_text = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() == 'a':
+            attrs_dict = {k.lower(): v for k, v in attrs if k and v}
+            if 'href' in attrs_dict:
+                self.in_anchor = True
+                self.current_href = attrs_dict['href']
+                self.current_text = []
+
+    def handle_data(self, data):
+        if self.in_anchor:
+            self.current_text.append(data)
+
+    def handle_endtag(self, tag):
+        if tag.lower() == 'a' and self.in_anchor:
+            text = " ".join("".join(self.current_text).split())
+            self.anchors.append((self.current_href, text))
+            self.in_anchor = False
+            self.current_href = ""
+            self.current_text = []
+
+def extrair_anchors_html(corpo_html: str):
+    parser = HTMLExtractor()
+    try:
+        parser.feed(corpo_html)
+    except Exception:
+        pass
+    return parser.anchors
+
+# ==========================================
+# FUNÇÕES AUXILIARES DE TRATAMENTO DE DATAS E TEXTO
 # ==========================================
 def converter_para_date(data_str: str):
     """Converte qualquer string de data (ISO, YYYY-MM-DD, DD-MM-YYYY) para um objeto date."""
@@ -181,7 +220,7 @@ def salvar_json(caminho: str, dados: dict):
         logging.error(f"Erro ao salvar {caminho}: {e}")
 
 # ==========================================
-# MOTOR ORIGINAL DE TRATAMENTO E EXTRAÇÃO IMAP
+# MOTOR DE TRATAMENTO E EXTRAÇÃO IMAP
 # ==========================================
 def normalizar_email_gmail(email_str: str) -> str:
     if not email_str:
@@ -211,17 +250,15 @@ def decodificar_assunto(assunto_raw: str) -> str:
     except Exception:
         return assunto_raw
 
-def tratar_quopri_e_html(payload_bytes: bytes) -> str:
+def tratar_quopri_e_html(payload_bytes: bytes, charset: str = 'utf-8') -> str:
     if not payload_bytes:
         return ""
     try:
-        payload_decodificado = quopri.decodestring(payload_bytes).decode('utf-8', errors='ignore')
+        texto = payload_bytes.decode(charset or 'utf-8', errors='ignore')
     except Exception:
-        payload_decodificado = payload_bytes.decode('utf-8', errors='ignore')
+        texto = payload_bytes.decode('utf-8', errors='ignore')
 
-    texto_sem_quebras = re.sub(r'=\r?\n', '', payload_decodificado)
-    texto_limpo = html.unescape(texto_sem_quebras)
-    return texto_limpo
+    return html.unescape(texto)
 
 def extrair_apenas_texto_visivel(html_str: str) -> str:
     if not html_str:
@@ -234,10 +271,8 @@ def extrair_apenas_texto_visivel(html_str: str) -> str:
 def limpar_url_link(link: str) -> str:
     if not link:
         return ""
-    # Remove rigorosamente qualquer espaço em branco, quebra de linha ou tabulação
     link_limpo = html.unescape(str(link))
     link_limpo = re.sub(r'[\r\n\t\s]+', '', link_limpo)
-    link_limpo = link_limpo.replace("&amp;", "&").replace("&#x3D;", "=").replace("&quot;", '"')
     return link_limpo.strip()
 
 def extrair_link_netflix_html(corpo_html: str, tipo: str = "geral") -> str:
@@ -245,45 +280,41 @@ def extrair_link_netflix_html(corpo_html: str, tipo: str = "geral") -> str:
         return ""
     bloqueadas = ["unsubscribe", "help.netflix.com", "privacy", "terms", "facebook", "twitter", "instagram"]
 
-    # 1. BUSCA POR TEXTO EXATO DO BOTÃO DA NETFLIX
-    anchors = re.findall(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', corpo_html, re.IGNORECASE | re.DOTALL)
-    
+    anchors = extrair_anchors_html(corpo_html)
+
+    # 1. PRIORIDADE MÁXIMA POR TEXTO DO BOTÃO
     if tipo == "viagem":
-        for href, inner_html in anchors:
-            texto_botao = re.sub(r'<[^>]+>', ' ', inner_html).strip().lower()
-            if any(p in texto_botao for p in ["receber código", "receber codigo", "solicitar código", "solicitar codigo", "obter código", "obter codigo", "estou viajando"]):
+        for href, text in anchors:
+            txt_lower = text.lower()
+            if any(p in txt_lower for p in ["receber código", "receber codigo", "solicitar código", "solicitar codigo", "obter código", "obter codigo", "estou viajando", "código temporário", "codigo temporario"]):
                 l_limpo = limpar_url_link(href)
                 if "netflix.com" in l_limpo.lower() and not any(x in l_limpo.lower() for x in bloqueadas):
                     return l_limpo
 
     if tipo == "residencia":
-        for href, inner_html in anchors:
-            texto_botao = re.sub(r'<[^>]+>', ' ', inner_html).strip().lower()
-            if any(p in texto_botao for p in ["sim, fui eu", "fui eu", "atualizar residência", "confirmar residência", "atualizar residencia"]):
+        for href, text in anchors:
+            txt_lower = text.lower()
+            if any(p in txt_lower for p in ["sim, fui eu", "fui eu", "atualizar residência", "confirmar residência", "atualizar residencia", "confirmar residencia"]):
                 l_limpo = limpar_url_link(href)
                 if "netflix.com" in l_limpo.lower() and not any(x in l_limpo.lower() for x in bloqueadas):
                     return l_limpo
 
-    # 2. BUSCA POR ESTRUTURA DA URL (ACCOUNT/TRAVEL OU UPDATE-PRIMARY-LOCATION)
-    raw_matches = re.findall(r'href=["\']([^"\']+)["\']', corpo_html, re.IGNORECASE)
-    cleaned_links = [limpar_url_link(m) for m in raw_matches if "netflix.com" in m.lower()]
+    # 2. PRIORIDADE POR ESTRUTURA DA URL NAS ANCHORS
+    for href, text in anchors:
+        l_limpo = limpar_url_link(href)
+        l_lower = l_limpo.lower()
+        if "netflix.com" in l_lower and not any(x in l_lower for x in bloqueadas):
+            if tipo == "viagem" and ("travel" in l_lower or "verify" in l_lower or "access" in l_lower):
+                return l_limpo
+            if tipo == "residencia" and ("update-primary-location" in l_lower or "household" in l_lower):
+                return l_limpo
 
-    if tipo == "viagem":
-        for l in cleaned_links:
-            l_lower = l.lower()
-            if ("travel" in l_lower or "verify" in l_lower) and not any(b in l_lower for b in bloqueadas):
-                return l
-
-    if tipo == "residencia":
-        for l in cleaned_links:
-            l_lower = l.lower()
-            if ("update-primary-location" in l_lower or "household" in l_lower) and not any(b in l_lower for b in bloqueadas):
-                return l
-
-    # 3. FALLBACK DE LINK COM TOKEN
-    for l in cleaned_links:
-        if "nftoken=" in l.lower() and not any(b in l.lower() for b in bloqueadas):
-            return l
+    # 3. FALLBACK POR TOKEN EM QUALQUER ANCHOR
+    for href, text in anchors:
+        l_limpo = limpar_url_link(href)
+        l_lower = l_limpo.lower()
+        if "netflix.com" in l_lower and "nftoken=" in l_lower and not any(x in l_lower for x in bloqueadas):
+            return l_limpo
 
     return ""
 
@@ -291,51 +322,42 @@ def extrair_link_hbomax_html(corpo_html: str) -> str:
     if not corpo_html:
         return ""
     palavras_hbomax = ["restabelecer", "redefinir", "reset", "nova senha", "alterar senha", "criar senha"]
-    anchors = re.findall(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', corpo_html, re.IGNORECASE | re.DOTALL)
-    for href, inner_html in anchors:
-        texto_botao = re.sub(r'<[^>]+>', ' ', inner_html).strip().lower()
-        if any(p in texto_botao for p in palavras_hbomax):
+    anchors = extrair_anchors_html(corpo_html)
+    for href, text in anchors:
+        if any(p in text.lower() for p in palavras_hbomax):
             return limpar_url_link(href)
 
-    matches = re.findall(r'href=["\'](https?://[^"\']+)["\']', corpo_html, re.IGNORECASE)
-    for link in matches:
-        link_lower = link.lower()
+    for href, text in anchors:
+        link_lower = href.lower()
         if ("hbomax.com" in link_lower or "max.com" in link_lower) and any(p in link_lower for p in ["reset", "token", "password", "auth", "credential"]):
             if not any(x in link_lower for x in ["unsubscribe", "help", "privacy", "terms"]):
-                return limpar_url_link(link)
-
-    for link in matches:
-        link_lower = link.lower()
-        if ("hbomax.com" in link_lower or "max.com" in link_lower) and not any(x in link_lower for x in ["unsubscribe", "help", "privacy", "terms", "twitter", "facebook"]):
-            link_sem_query = link_lower.split("?")[0].strip("/")
-            if link_sem_query not in ["https://www.hbomax.com", "https://hbomax.com", "https://www.max.com", "https://max.com"]:
-                return limpar_url_link(link)
+                return limpar_url_link(href)
 
     return ""
 
 def extrair_link_redefinicao_html(corpo_html: str) -> str:
     if not corpo_html:
         return ""
-    matches = re.findall(r'href=["\'](https?://[^"\']+)["\']', corpo_html, re.IGNORECASE)
-    for link in matches:
-        link_lower = link.lower()
+    anchors = extrair_anchors_html(corpo_html)
+    for href, text in anchors:
+        link_lower = href.lower()
         if any(p in link_lower for p in ["recuperar", "redefinir", "reset", "password", "alterar", "senha", "token", "confirm"]):
             if not any(x in link_lower for x in ["unsubscribe", "help", "privacy", "terms", "facebook", "twitter"]):
-                return limpar_url_link(link)
+                return limpar_url_link(href)
 
-    for link in matches:
-        link_lower = link.lower()
+    for href, text in anchors:
+        link_lower = href.lower()
         if not any(x in link_lower for x in ["unsubscribe", "help", "privacy", "terms", "facebook", "twitter"]):
-            return limpar_url_link(link)
+            return limpar_url_link(href)
     return ""
 
 def extrair_url_pura_href(corpo_html: str, termo_busca: str = "http") -> str:
     if not corpo_html:
         return ""
-    matches = re.findall(r'href=["\'](https?://[^"\']+)["\']', corpo_html, re.IGNORECASE)
-    for link in matches:
-        if termo_busca in link.lower() and not any(x in link.lower() for x in ["unsubscribe", "help", "privacy", "terms", "manageaccountaccess"]):
-            return limpar_url_link(link)
+    anchors = extrair_anchors_html(corpo_html)
+    for href, text in anchors:
+        if termo_busca in href.lower() and not any(x in href.lower() for x in ["unsubscribe", "help", "privacy", "terms", "manageaccountaccess"]):
+            return limpar_url_link(href)
     return ""
 
 def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool = False) -> str:
@@ -394,6 +416,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             remetente_lower = str(msg.get("From", "")).lower()
 
             corpo_bruto = b""
+            charset_msg = "utf-8"
             if msg.is_multipart():
                 for part in msg.walk():
                     content_type = part.get_content_type()
@@ -403,12 +426,16 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                             payload = part.get_payload(decode=True)
                             if payload:
                                 corpo_bruto += payload + b"\n"
+                                if part.get_content_charset():
+                                    charset_msg = part.get_content_charset()
             else:
                 payload = msg.get_payload(decode=True)
                 if payload:
                     corpo_bruto = payload
+                    if msg.get_content_charset():
+                        charset_msg = msg.get_content_charset()
 
-            corpo_html = tratar_quopri_e_html(corpo_bruto)
+            corpo_html = tratar_quopri_e_html(corpo_bruto, charset=charset_msg)
             corpo_texto_puro = extrair_apenas_texto_visivel(corpo_html)
 
             minutos = max(1, int(diferenca_segundos // 60)) if diferenca_segundos > 0 else 1
@@ -436,7 +463,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     mail.logout()
                     return f"✅ <b>Código de Acesso Netflix Encontrado!</b>\n\n🔑 Seu código é: <code>{codigo_valido}</code>\n\n⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
 
-            # 3. NETFLIX: CÓDIGO TEMPORÁRIO / VIAJANDO / RECEBER CÓDIGO (CHECADO PRIMEIRO PARA EVITAR CONFUSÃO COM RESIDÊNCIA)
+            # 3. NETFLIX: CÓDIGO TEMPORÁRIO / VIAJANDO / RECEBER CÓDIGO
             eh_viagem_netflix = any(p in assunto_lower or p in corpo_texto_puro.lower() for p in [
                 "código de acesso temporário", "codigo de acesso temporario", "fora da sua residência", "fora da sua residencia",
                 "estou viajando", "código de viagem", "codigo de viagem", "acesso temporário", "acesso temporario",
@@ -464,7 +491,8 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             eh_residencia_netflix = any(p in assunto_lower or p in corpo_texto_puro.lower() for p in [
                 "como atualizar sua residência", "como atualizar sua residencia", "você pediu para atualizar",
                 "voce pediu para atualizar", "atualizar sua residência", "atualizar residencia", "confirme seu endereço"
-            ])
+            ]) or "update-primary-location" in corpo_html.lower() or "sim, fui eu" in corpo_texto_puro.lower()
+
             if eh_netflix and eh_residencia_netflix:
                 link_residencia = extrair_link_netflix_html(corpo_html, tipo="residencia")
                 if link_residencia:
@@ -911,7 +939,7 @@ def main():
             app.add_handler(CommandHandler("listar", listar_clientes))
             app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receber_mensagem_email))
 
-            print("🤖 Bot iniciado e rodando no Render com mensagens limpas e links 100% precisos...")
+            print("🤖 Bot iniciado e rodando no Render com extração de links 100% íntegra...")
             app.run_polling(poll_interval=1.0, timeout=20)
         except Exception as e:
             logging.error(f"Ocorreu uma queda temporária no Bot: {e}. Reconectando em 5 segundos...")
