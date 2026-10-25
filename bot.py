@@ -283,7 +283,7 @@ def extrair_link_netflix_html(corpo_html: str, tipo: str = "geral") -> str:
 
     anchors = extrair_anchors_html(corpo_html)
 
-    # 1. PRIORIDADE MÁXIMA POR TEXTO DO BOTÃO NA ANCHOR
+    # 1. BUSCA POR TEXTO DO BOTÃO NA TAG <a>
     if tipo in ["residencia", "geral"]:
         for href, text in anchors:
             txt_lower = text.lower()
@@ -295,27 +295,19 @@ def extrair_link_netflix_html(corpo_html: str, tipo: str = "geral") -> str:
     if tipo in ["viagem", "geral"]:
         for href, text in anchors:
             txt_lower = text.lower()
-            if any(p in txt_lower for p in ["receber código", "receber codigo", "solicitar código", "solicitar codigo", "obter código", "obter codigo", "estou viajando", "código temporário", "codigo temporario"]):
+            if any(p in txt_lower for p in ["receber código", "receber codigo", "solicitar código", "solicitar codigo", "obter código", "obter codigo", "estou viajando"]):
                 l_limpo = limpar_url_link(href)
                 if "netflix.com" in l_limpo.lower() and not any(x in l_limpo.lower() for x in bloqueadas):
                     return l_limpo
 
-    # 2. PRIORIDADE POR ESTRUTURA DA URL NAS ANCHORS
+    # 2. BUSCA POR CAMINHO ESPECÍFICO DA URL NAS ANCHORS (SEM FALLBACK GENÉRICO DE RODAPÉ)
     for href, text in anchors:
         l_limpo = limpar_url_link(href)
         l_lower = l_limpo.lower()
         if "netflix.com" in l_lower and not any(x in l_lower for x in bloqueadas):
             if tipo == "residencia" and ("update-primary-location" in l_lower or "household" in l_lower):
                 return l_limpo
-            if tipo == "viagem" and ("travel" in l_lower or "verify" in l_lower or "accountaccess" in l_lower):
-                return l_limpo
-
-    # 3. FALLBACK DE LINK COM TOKEN DE ACESSO / LOCATION
-    for href, text in anchors:
-        l_limpo = limpar_url_link(href)
-        l_lower = l_limpo.lower()
-        if "netflix.com" in l_lower and not any(x in l_lower for x in bloqueadas):
-            if ("nftoken=" in l_lower or "update-primary-location" in l_lower or "travel" in l_lower or "accountaccess" in l_lower):
+            if tipo == "viagem" and ("travel" in l_lower or "/travel/verify" in l_lower):
                 return l_limpo
 
     return ""
@@ -456,9 +448,23 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     mail.logout()
                     return f"✅ <b>Código Disney+ Encontrado!</b>\n\n🔑 Seu código é: <code>{codigo_valido}</code>\n\n⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
 
-            # 2. NETFLIX: TRATAMENTO COMPLETO POR TIPO DE E-MAIL
+            # 2. NETFLIX: TRATAMENTO PRECISO POR CONTEÚDO REAL
             if eh_netflix:
-                # A. CONFIRMAÇÃO / ATUALIZAÇÃO DE RESIDÊNCIA (PRIORIDADE ABSOLUTA - EVITA FALSOS POSITIVOS DE TROCA DE SENHA)
+                # A. CÓDIGO DE ACESSO DIRETO / LOGIN (ASSUNTO EXPLICITO: "Seu código de acesso")
+                eh_codigo_direto = any(p in assunto_lower for p in [
+                    "seu código de acesso", "seu codigo de acesso",
+                    "informe este código", "informe este codigo", "código de verificação"
+                ])
+                if eh_codigo_direto:
+                    texto_limpo = re.sub(r'\b\d{1,2}:\d{2}(?::\d{2})?\b', '', corpo_texto_puro)
+                    codigos = re.findall(r'\b\d{4,6}\b', texto_limpo)
+                    codigo_valido = next((c for c in codigos if c not in ["2024", "2025", "2026", "2027"] and not c.startswith("0800")), None)
+                    if codigo_valido:
+                        mail.close()
+                        mail.logout()
+                        return f"✅ <b>Código de Acesso Netflix Encontrado!</b>\n\n🔑 Seu código é: <code>{codigo_valido}</code>\n\n⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
+
+                # B. CONFIRMAÇÃO / ATUALIZAÇÃO DE RESIDÊNCIA (LINK NO BOTÃO "Sim, fui eu")
                 eh_residencia = any(p in assunto_lower for p in [
                     "como atualizar sua residência", "como atualizar sua residencia",
                     "atualizar sua residência", "atualizar sua residencia", "residência netflix", "residencia netflix"
@@ -479,14 +485,19 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                             f"⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
                         )
 
-                # B. CÓDIGO TEMPORÁRIO / VIAJANDO / RECEBER CÓDIGO (LINK OU CÓDIGO)
+                # C. CÓDIGO TEMPORÁRIO / VIAJANDO / RECEBER CÓDIGO (LINK OU CÓDIGO)
                 eh_viagem = any(p in assunto_lower or p in corpo_texto_puro.lower() for p in [
                     "código de acesso temporário", "codigo de acesso temporario", "fora da sua residência", "fora da sua residencia",
                     "estou viajando", "código de viagem", "codigo de viagem", "acesso temporário", "acesso temporario",
                     "receber código", "receber codigo", "solicitar código", "solicitar codigo", "obter código", "obter codigo"
                 ])
                 if eh_viagem:
+                    texto_limpo = re.sub(r'\b\d{1,2}:\d{2}(?::\d{2})?\b', '', corpo_texto_puro)
+                    codigos = re.findall(r'\b\d{4,6}\b', texto_limpo)
+                    codigo_valido = next((c for c in codigos if c not in ["2024", "2025", "2026", "2027"] and not c.startswith("0800")), None)
+
                     link_viagem = extrair_link_netflix_html(corpo_html, tipo="viagem")
+
                     if link_viagem:
                         mail.close()
                         mail.logout()
@@ -496,16 +507,12 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                             f"💡 <i><b>Importante para Celular:</b> Se abrir a tela 'A Netflix fica melhor com o app', toque nos 3 pontinhos do navegador do celular e ative <b>'Versão para Computador' (Desktop)</b> para que o código apareça.</i>\n\n"
                             f"⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
                         )
-                    
-                    texto_limpo_horarios = re.sub(r'\b\d{1,2}:\d{2}(?::\d{2})?\b', '', corpo_texto_puro)
-                    codigos = re.findall(r'\b\d{4,6}\b', texto_limpo_horarios)
-                    codigo_valido = next((c for c in codigos if c not in ["2024", "2025", "2026", "2027"] and not c.startswith("0800")), None)
-                    if codigo_valido:
+                    elif codigo_valido:
                         mail.close()
                         mail.logout()
                         return f"✅ <b>Código de Viagem / Acesso Netflix Encontrado!</b>\n\n🔑 Seu código é: <code>{codigo_valido}</code>\n\n⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
 
-                # C. REDEFINIÇÃO DE SENHA / ALTERAÇÃO DE DADOS (APENAS COM ASSUNTO EXPLICITO OU LINK DE RESET)
+                # D. REDEFINIÇÃO DE SENHA / ALTERAÇÃO DE DADOS (APENAS COM ASSUNTO EXPLICITO OU RESET)
                 eh_redefinicao = any(p in assunto_lower for p in [
                     "redefinir sua senha", "redefinir senha", "alterar sua senha", "reset password", "alteração de senha", "redefinição de senha"
                 ]) or ("reset-password" in corpo_html.lower() and "update-primary-location" not in corpo_html.lower())
@@ -525,33 +532,20 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                             f"⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
                         )
 
-                # D. CÓDIGO DE ACESSO DIRETO (LOGIN / DISPOSITIVO)
-                eh_codigo_direto = any(p in assunto_lower for p in ["seu código de acesso", "seu codigo de acesso", "informe este código", "informe este codigo", "código de verificação"])
-                if eh_codigo_direto:
-                    texto_limpo_horarios = re.sub(r'\b\d{1,2}:\d{2}(?::\d{2})?\b', '', corpo_texto_puro)
-                    codigos = re.findall(r'\b\d{4,6}\b', texto_limpo_horarios)
-                    codigo_valido = next((c for c in codigos if c not in ["2024", "2025", "2026", "2027"] and not c.startswith("0800")), None)
-                    if codigo_valido:
-                        mail.close()
-                        mail.logout()
-                        return f"✅ <b>Código de Acesso Netflix Encontrado!</b>\n\n🔑 Seu código é: <code>{codigo_valido}</code>\n\n⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
-
-                # E. FALLBACK DE LINK NETFLIX (QUALQUER LINK VÁLIDO DE SOLICITAÇÃO)
-                link_fallback_netflix = extrair_link_netflix_html(corpo_html, tipo="geral")
-                if link_fallback_netflix:
+                # E. FALLBACK DE CÓDIGO NUMÉRICO PARA NETFLIX
+                texto_limpo = re.sub(r'\b\d{1,2}:\d{2}(?::\d{2})?\b', '', corpo_texto_puro)
+                codigos = re.findall(r'\b\d{4,6}\b', texto_limpo)
+                codigo_valido = next((c for c in codigos if c not in ["2024", "2025", "2026", "2027"] and not c.startswith("0800")), None)
+                if codigo_valido:
                     mail.close()
                     mail.logout()
-                    return (
-                        f"✅ <b>Link Netflix Encontrado!</b>\n\n"
-                        f"👉 <a href=\"{link_fallback_netflix}\">Clique aqui para acessar a solicitação da Netflix</a>\n\n"
-                        f"⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
-                    )
+                    return f"✅ <b>Código de Acesso Netflix Encontrado!</b>\n\n🔑 Seu código é: <code>{codigo_valido}</code>\n\n⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
 
             # 3. CÓDIGO NUMÉRICO DE ENTRADA / ACESSO GERAL
             eh_email_codigo = any(p in assunto_lower for p in ["código", "codigo", "temporário", "temporario", "autorização", "autorizacao", "verificação", "verificacao"])
             if eh_email_codigo:
-                texto_limpo_horarios = re.sub(r'\b\d{1,2}:\d{2}(?::\d{2})?\b', '', corpo_texto_puro)
-                codigos = re.findall(r'\b\d{4,6}\b', texto_limpo_horarios)
+                texto_limpo = re.sub(r'\b\d{1,2}:\d{2}(?::\d{2})?\b', '', corpo_texto_puro)
+                codigos = re.findall(r'\b\d{4,6}\b', texto_limpo)
                 codigo_valido = next((c for c in codigos if not c.startswith("0800") and c not in ["2024", "2025", "2026", "2027"]), None)
                 if codigo_valido:
                     mail.close()
@@ -583,9 +577,9 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         f"⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
                     )
 
-            # 5. CASO GENÉRICO DE FALLBACK
-            texto_limpo_horarios = re.sub(r'\b\d{1,2}:\d{2}(?::\d{2})?\b', '', corpo_texto_puro)
-            codigos_encontrados = re.findall(r'\b\d{4,6}\b', texto_limpo_horarios)
+            # 5. CASO GENÉRICO DE FALLBACK DE CÓDIGO
+            texto_limpo = re.sub(r'\b\d{1,2}:\d{2}(?::\d{2})?\b', '', corpo_texto_puro)
+            codigos_encontrados = re.findall(r'\b\d{4,6}\b', texto_limpo)
             codigo_valido = next((c for c in codigos_encontrados if not c.startswith("0800") and c not in ["2024", "2025", "2026", "2027"]), None)
             if codigo_valido:
                 mail.close()
@@ -1003,7 +997,7 @@ def main():
             
             app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receber_mensagem_email))
 
-            print("🤖 Bot iniciado e rodando no Render com correção na identificação de e-mails de residência...")
+            print("🤖 Bot iniciado e rodando no Render com precisão na extração de códigos e links...")
             app.run_polling(poll_interval=1.0, timeout=20)
         except Exception as e:
             logging.error(f"Ocorreu uma queda temporária no Bot: {e}. Reconectando em 5 segundos...")
