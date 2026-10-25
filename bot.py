@@ -458,30 +458,13 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
             # 2. NETFLIX: TRATAMENTO COMPLETO POR TIPO DE E-MAIL
             if eh_netflix:
-                # A. REDEFINIÇÃO DE SENHA / ALTERAÇÃO DE DADOS
-                eh_redefinicao = any(p in assunto_lower or p in corpo_texto_puro.lower() for p in [
-                    "redefinir sua senha", "redefinir senha", "alterar sua senha", "reset password", "alteração de senha"
-                ])
-                if eh_redefinicao:
-                    if not pode_acessar_sensivel:
-                        mail.close()
-                        mail.logout()
-                        return "🚫 <b>Solicitação Não Permitida!</b>\n\nEste e-mail trata de redefinição de senha ou alteração de dados."
-                    link_reset = extrair_link_netflix_html(corpo_html, tipo="geral")
-                    if link_reset:
-                        mail.close()
-                        mail.logout()
-                        return (
-                            f"✅ <b>Link de Redefinição de Senha Netflix Encontrado!</b>\n\n"
-                            f"👉 <a href=\"{link_reset}\">Clique aqui para redefinir sua senha</a>\n\n"
-                            f"⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
-                        )
-
-                # B. CONFIRMAÇÃO / ATUALIZAÇÃO DE RESIDÊNCIA (LINKS EXCLUSIVOS)
-                eh_residencia = any(p in assunto_lower or p in corpo_texto_puro.lower() for p in [
-                    "atualizar sua residência", "atualizar sua residencia", "residência netflix", "residencia netflix",
-                    "confirme seu endereço", "confirmar residência", "confirmar residencia", "como atualizar sua residência",
-                    "voce pediu para atualizar", "você pediu para atualizar", "sim, fui eu", "fui eu"
+                # A. CONFIRMAÇÃO / ATUALIZAÇÃO DE RESIDÊNCIA (PRIORIDADE ABSOLUTA - EVITA FALSOS POSITIVOS DE TROCA DE SENHA)
+                eh_residencia = any(p in assunto_lower for p in [
+                    "como atualizar sua residência", "como atualizar sua residencia",
+                    "atualizar sua residência", "atualizar sua residencia", "residência netflix", "residencia netflix"
+                ]) or any(p in corpo_texto_puro.lower() for p in [
+                    "confirme seu endereço", "confirmar residência", "confirmar residencia",
+                    "voce pediu para atualizar", "você pediu para atualizar", "sim, fui eu"
                 ]) or "update-primary-location" in corpo_html.lower()
 
                 if eh_residencia:
@@ -496,7 +479,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                             f"⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
                         )
 
-                # C. CÓDIGO TEMPORÁRIO / VIAJANDO / RECEBER CÓDIGO (LINK OU CÓDIGO)
+                # B. CÓDIGO TEMPORÁRIO / VIAJANDO / RECEBER CÓDIGO (LINK OU CÓDIGO)
                 eh_viagem = any(p in assunto_lower or p in corpo_texto_puro.lower() for p in [
                     "código de acesso temporário", "codigo de acesso temporario", "fora da sua residência", "fora da sua residencia",
                     "estou viajando", "código de viagem", "codigo de viagem", "acesso temporário", "acesso temporario",
@@ -521,6 +504,26 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         mail.close()
                         mail.logout()
                         return f"✅ <b>Código de Viagem / Acesso Netflix Encontrado!</b>\n\n🔑 Seu código é: <code>{codigo_valido}</code>\n\n⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
+
+                # C. REDEFINIÇÃO DE SENHA / ALTERAÇÃO DE DADOS (APENAS COM ASSUNTO EXPLICITO OU LINK DE RESET)
+                eh_redefinicao = any(p in assunto_lower for p in [
+                    "redefinir sua senha", "redefinir senha", "alterar sua senha", "reset password", "alteração de senha", "redefinição de senha"
+                ]) or ("reset-password" in corpo_html.lower() and "update-primary-location" not in corpo_html.lower())
+
+                if eh_redefinicao:
+                    if not pode_acessar_sensivel:
+                        mail.close()
+                        mail.logout()
+                        return "🚫 <b>Solicitação Não Permitida!</b>\n\nEste e-mail trata de redefinição de senha ou alteração de dados."
+                    link_reset = extrair_link_netflix_html(corpo_html, tipo="geral")
+                    if link_reset:
+                        mail.close()
+                        mail.logout()
+                        return (
+                            f"✅ <b>Link de Redefinição de Senha Netflix Encontrado!</b>\n\n"
+                            f"👉 <a href=\"{link_reset}\">Clique aqui para redefinir sua senha</a>\n\n"
+                            f"⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
+                        )
 
                 # D. CÓDIGO DE ACESSO DIRETO (LOGIN / DISPOSITIVO)
                 eh_codigo_direto = any(p in assunto_lower for p in ["seu código de acesso", "seu codigo de acesso", "informe este código", "informe este codigo", "código de verificação"])
@@ -996,12 +999,11 @@ def main():
             app.add_handler(CommandHandler("limpar_nao_vip", limpar_nao_vip))
             app.add_handler(CommandHandler("listar", listar_clientes))
             
-            # Handler para o botão interativo de tutorial
             app.add_handler(CallbackQueryHandler(tutorial_callback))
             
             app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receber_mensagem_email))
 
-            print("🤖 Bot iniciado e rodando com o botão interativo de tutorial...")
+            print("🤖 Bot iniciado e rodando no Render com correção na identificação de e-mails de residência...")
             app.run_polling(poll_interval=1.0, timeout=20)
         except Exception as e:
             logging.error(f"Ocorreu uma queda temporária no Bot: {e}. Reconectando em 5 segundos...")
