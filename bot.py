@@ -16,11 +16,12 @@ from html.parser import HTMLParser
 
 from flask import Flask
 from supabase import create_client, Client
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     ContextTypes,
     filters,
 )
@@ -618,12 +619,34 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 # ==========================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id).strip()
+    
+    keyboard = [
+        [InlineKeyboardButton("📖 Como Usar / Tutorial", callback_data="tutorial")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
     await update.message.reply_text(
         f"👋 <b>Central de Liberação de Códigos</b>\n\n"
         f"🆔 <b>Seu ID do Telegram:</b> <code>{user_id}</code>\n\n"
-        f"Envie o e-mail cadastrado abaixo para buscar códigos/links recentes.",
-        parse_mode="HTML"
+        f"Envie o e-mail cadastrado abaixo para buscar códigos/links recentes.\n\n"
+        f"<i>Dúvidas de como usar? Clique no botão abaixo 👇</i>",
+        parse_mode="HTML",
+        reply_markup=reply_markup
     )
+
+async def tutorial_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "tutorial":
+        texto_tutorial = (
+            "🤖 <b>COMO USAR O BOT (PASSO A PASSO):</b>\n\n"
+            "1️⃣ Na sua TV, dê preferência para a opção <b>'Estou viajando'</b> ou <b>'Atualizar residência'</b> e clique em <b>Enviar e-mail/Código</b>.\n\n"
+            "2️⃣ Digite <b>APENAS o e-mail exato</b> da conta aqui neste chat.\n\n"
+            "3️⃣ Se receber um <b>código</b>, digite-o na TV. Se receber um <b>link em azul</b>, basta clicar nele para liberar a tela.\n\n"
+            "📌 <i>Atenção: Digite a grafia exata do e-mail cadastrado (com os mesmos pontos e letras).</i>"
+        )
+        await query.message.reply_text(texto_tutorial, parse_mode="HTML")
 
 async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_user.id).strip() != str(ADMIN_ID).strip():
@@ -972,9 +995,13 @@ def main():
             app.add_handler(CommandHandler("limpar", limpar_nao_vip))
             app.add_handler(CommandHandler("limpar_nao_vip", limpar_nao_vip))
             app.add_handler(CommandHandler("listar", listar_clientes))
+            
+            # Handler para o botão interativo de tutorial
+            app.add_handler(CallbackQueryHandler(tutorial_callback))
+            
             app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receber_mensagem_email))
 
-            print("🤖 Bot iniciado e rodando no Render com reconhecimento estrito dos e-mails da Netflix...")
+            print("🤖 Bot iniciado e rodando com o botão interativo de tutorial...")
             app.run_polling(poll_interval=1.0, timeout=20)
         except Exception as e:
             logging.error(f"Ocorreu uma queda temporária no Bot: {e}. Reconectando em 5 segundos...")
