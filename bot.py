@@ -58,7 +58,6 @@ CLIENTES_FIXOS_PADRAO = {
     }
 }
 
-# Dicionário global para controlar múltiplas instâncias de Bots rodando simultaneamente
 APLICACOES_BOTS = {}
 
 # ==========================================
@@ -135,7 +134,7 @@ def run_flask():
     app_flask.run(host='0.0.0.0', port=port)
 
 # ==========================================
-# BANCO DE DADOS E PERSISTÊNCIA (CONTAS, REVENDAS, CLIENTES, BOTS)
+# BANCO DE DADOS E PERSISTÊNCIA
 # ==========================================
 def carregar_json(caminho: str) -> dict:
     if caminho == "clientes.json":
@@ -845,13 +844,39 @@ async def verificar_alertas_vencimento(app):
             logging.error(f"Erro na rotina de alertas de vencimento: {err}")
 
 # ==========================================
+# TUTORIAL DE GERAR SENHAS DE APP
+# ==========================================
+async def senhas_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    texto_senhas = (
+        "🔑 <b>GUIA: COMO GERAR SENHA DE APLICATIVO POR PROVEDOR</b>\n\n"
+        "<i>Para cadastrar uma conta no bot com o comando <code>/addconta</code>, você não deve usar a senha normal do seu e-mail, e sim uma <b>Senha de Aplicativo (16 dígitos)</b>.</i>\n\n"
+        "🔴 <b>GMAIL (@gmail.com):</b>\n"
+        "1️⃣ Acesse sua conta em: <a href=\"https://myaccount.google.com/security\">myaccount.google.com/security</a>\n"
+        "2️⃣ Ative a <b>Verificação em duas etapas</b> (caso não esteja ativa).\n"
+        "3️⃣ Pesquise por <b>'Senhas de app'</b> na barra de busca do Google Account.\n"
+        "4️⃣ Crie uma senha com o nome <code>Bot Telegram</code> e copie os 16 caracteres gerados.\n\n"
+        "🔵 <b>OUTLOOK / HOTMAIL (@outlook.com / @hotmail.com):</b>\n"
+        "1️⃣ Acesse sua conta Microsoft em: <a href=\"https://account.microsoft.com/security\">account.microsoft.com/security</a>\n"
+        "2️⃣ Vá em <b>Opções de segurança avançadas</b> e ative a <b>Verificação em duas etapas</b>.\n"
+        "3️⃣ Procure a seção <b>'Senhas de aplicativo'</b> e clique em <b>Criar uma nova senha de aplicativo</b>.\n\n"
+        "🟣 <b>YAHOO (@yahoo.com):</b>\n"
+        "1️⃣ Acesse <a href=\"https://login.yahoo.com/account/security\">login.yahoo.com/account/security</a>\n"
+        "2️⃣ Na seção 'Segurança', clique em <b>Gerar senha de aplicativo</b>.\n"
+        "3️⃣ Selecione 'Outro aplicativo', digite <code>Bot Telegram</code> e copie os caracteres.\n\n"
+        "💡 <b>Exemplo de Comando para Cadastrar no Bot:</b>\n"
+        "<code>/addconta minhatela@gmail.com abcd efgh ijkl mnop</code>"
+    )
+    await update.message.reply_text(texto_senhas, parse_mode="HTML", disable_web_page_preview=True)
+
+# ==========================================
 # COMANDOS E PAINEL / MENU DO BOT
 # ==========================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id).strip()
 
     keyboard = [
-        [InlineKeyboardButton("📖 Como Usar / Tutorial", callback_data="tutorial")]
+        [InlineKeyboardButton("📖 Como Usar / Tutorial", callback_data="tutorial")],
+        [InlineKeyboardButton("🔑 Como Gerar Senhas de App", callback_data="tutorial_senhas")]
     ]
     if eh_revendedor(user_id):
         keyboard.append([InlineKeyboardButton("⚙️ Painel de Controle / Menu", callback_data="menu_admin")])
@@ -862,7 +887,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"👋 <b>Central de Liberação de Códigos</b>\n\n"
         f"🆔 <b>Seu ID do Telegram:</b> <code>{user_id}</code>\n\n"
         f"Envie o e-mail cadastrado abaixo para buscar códigos/links recentes.\n\n"
-        f"<i>Dúvidas de como usar? Clique no botão abaixo 👇</i>",
+        f"<i>Dúvidas de como usar? Clique nos botões abaixo 👇</i>",
         parse_mode="HTML",
         reply_markup=reply_markup
     )
@@ -880,6 +905,8 @@ async def menu_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_master:
         texto_menu = (
             "👑 <b>PAINEL MASTER ADM</b>\n\n"
+            "🌐 <b>Domínios Suportados:</b> Gmail, Outlook/Hotmail e Yahoo.\n"
+            "💡 Use o comando <code>/senhas</code> para ver o tutorial de Senhas de App.\n\n"
             "<b>Gerenciamento de Revendedores:</b>\n"
             "• <code>/addrevenda ID_TELEGRAM DIAS_OU_DATA</code> - Adicionar Revendedor\n"
             "• <code>/delrevenda ID_TELEGRAM</code> - Remover Revendedor\n"
@@ -902,6 +929,8 @@ async def menu_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         texto_menu = (
             "💼 <b>PAINEL DO REVENDEDOR</b>\n\n"
+            "🌐 <b>Domínios Suportados:</b> Gmail, Outlook/Hotmail e Yahoo.\n"
+            "🔑 Use o comando <code>/senhas</code> para ver como gerar a Senha de App do seu e-mail.\n\n"
             "<b>Gerenciamento de Suas Contas:</b>\n"
             "• <code>/addconta EMAIL SENHA_APP</code> - Cadastrar seu E-mail\n"
             "• <code>/delconta EMAIL</code> - Remover seu E-mail\n"
@@ -928,8 +957,10 @@ async def tutorial_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "📌 <i>Atenção: Digite a grafia exata do e-mail cadastrado (com os mesmos pontos e letras).</i>"
         )
         await query.message.reply_text(texto_tutorial, parse_mode="HTML")
+    elif query.data == "tutorial_senhas":
+        await senhas_comando(query, context)
     elif query.data == "menu_admin":
-        await menu_comando(update, context)
+        await menu_comando(query, context)
 
 # ==========================================
 # GERENCIAMENTO DE BOTS WHITE-LABEL (MASTER ADM)
@@ -954,7 +985,6 @@ async def add_bot_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bots[token_bot] = {"dono_id": dono_revenda_id}
     salvar_json("bots.json", bots)
 
-    # Iniciar dinamicamente a nova aplicação do Bot no asyncio loop atual
     loop = asyncio.get_running_loop()
     loop.create_task(iniciar_instancia_bot(token_bot, dono_revenda_id))
 
@@ -1138,7 +1168,8 @@ async def add_conta_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
         await update.message.reply_text(
             "⚠️ <b>Uso correto:</b> <code>/addconta email@gmail.com SENHA_DO_APP</code>\n\n"
-            "Exemplo: <code>/addconta cliente1@gmail.com abcd efgh ijkl mnop</code>",
+            "Exemplo: <code>/addconta cliente1@gmail.com abcd efgh ijkl mnop</code>\n\n"
+            "<i>Caso tenha dúvidas sobre como gerar a Senha de App do Gmail, Outlook ou Yahoo, use <code>/senhas</code></i>",
             parse_mode="HTML"
         )
         return
@@ -1439,7 +1470,6 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
     user_id = str(update.effective_user.id).strip()
     email_original = update.message.text.strip().lower()
 
-    # Identificar se a requisição veio de um Bot de Revenda White-Label
     bot_dono_id = context.bot_data.get("dono_id")
 
     clientes = carregar_json("clientes.json")
@@ -1499,7 +1529,6 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
         for chave_email, dados in contas.items():
             chave_norm = normalizar_email_gmail(chave_email)
             if chave_email.strip().lower() == email_original or chave_norm == email_base:
-                # Se for bot de revenda, filtrar apenas contas pertencentes àquela revenda
                 dono_conta = str(dados.get("dono_id", ADMIN_ID))
                 if bot_dono_id and not eh_admin and dono_conta != bot_dono_id:
                     continue
@@ -1545,6 +1574,8 @@ def construir_aplicacao_bot(token: str, dono_id: str = None):
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("menu", menu_comando))
     app.add_handler(CommandHandler("admin", menu_comando))
+    app.add_handler(CommandHandler("senhas", senhas_comando))
+    app.add_handler(CommandHandler("tutorial_senhas", senhas_comando))
     app.add_handler(CallbackQueryHandler(tutorial_callback))
 
     # Comandos Master
@@ -1585,7 +1616,6 @@ async def iniciar_instancia_bot(token: str, dono_id: str = None):
 async def post_init(application):
     asyncio.create_task(verificar_alertas_vencimento(application))
     
-    # Iniciar todos os bots de revenda salvos
     bots_cadastrados = carregar_json("bots.json")
     for token_bot, info in bots_cadastrados.items():
         if token_bot != TOKEN_TELEGRAM_MASTER:
@@ -1603,10 +1633,11 @@ def main():
                 .build()
             )
 
-            # Configurar handlers no Bot Master
             app_master.add_handler(CommandHandler("start", start))
             app_master.add_handler(CommandHandler("menu", menu_comando))
             app_master.add_handler(CommandHandler("admin", menu_comando))
+            app_master.add_handler(CommandHandler("senhas", senhas_comando))
+            app_master.add_handler(CommandHandler("tutorial_senhas", senhas_comando))
             app_master.add_handler(CallbackQueryHandler(tutorial_callback))
 
             app_master.add_handler(CommandHandler("addbot", add_bot_comando))
@@ -1628,7 +1659,7 @@ def main():
 
             app_master.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receber_mensagem_email))
 
-            print("🤖 Bot Master e Sistema Multi-Bot White-Label ativos e rodando!")
+            print("🤖 Bot Master e Sistema Multi-Bot White-Label ativos com suporte a múltiplos provedores!")
             app_master.run_polling(poll_interval=1.0, timeout=20)
         except Exception as e:
             logging.error(f"Ocorreu uma queda temporária no Bot: {e}. Reconectando em 5 segundos...")
