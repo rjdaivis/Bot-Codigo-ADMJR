@@ -262,6 +262,13 @@ def salvar_novo_erro(user_id: str, mensagem: str, tem_foto: bool = False):
 # --- GERENCIAMENTO DE BOTS WHITE-LABEL ---
 def carregar_bots_db() -> dict:
     dados = {}
+    if os.path.exists("bots.json"):
+        try:
+            with open("bots.json", "r", encoding="utf-8") as f:
+                dados = json.load(f)
+        except Exception:
+            pass
+
     if supabase:
         try:
             res = supabase.table("bots_revenda").select("*").execute()
@@ -269,12 +276,6 @@ def carregar_bots_db() -> dict:
                 for row in res.data:
                     tok = str(row.get("token")).strip()
                     dados[tok] = {"dono_id": str(row.get("dono_id")).strip()}
-        except Exception:
-            pass
-    if not dados and os.path.exists("bots.json"):
-        try:
-            with open("bots.json", "r", encoding="utf-8") as f:
-                dados = json.load(f)
         except Exception:
             pass
     return dados
@@ -297,19 +298,19 @@ def salvar_bots_db(dados: dict):
 # --- CONFIGURAÇÕES GERAIS ---
 def carregar_config_db() -> dict:
     padrao = {"notificar_clientes": True}
+    if os.path.exists("config.json"):
+        try:
+            with open("config.json", "r", encoding="utf-8") as f:
+                padrao.update(json.load(f))
+        except Exception:
+            pass
+
     if supabase:
         try:
             res = supabase.table("config_bot").select("*").execute()
             if res.data:
                 for row in res.data:
                     padrao[row.get("chave")] = row.get("valor")
-                return padrao
-        except Exception:
-            pass
-    if os.path.exists("config.json"):
-        try:
-            with open("config.json", "r", encoding="utf-8") as f:
-                return json.load(f)
         except Exception:
             pass
     return padrao
@@ -332,6 +333,13 @@ def salvar_config_db(dados: dict):
 # --- GERENCIAMENTO DE REVENDEDORES ---
 def carregar_revendedores_db() -> dict:
     dados = {}
+    if os.path.exists("revendedores.json"):
+        try:
+            with open("revendedores.json", "r", encoding="utf-8") as f:
+                dados = json.load(f)
+        except Exception as e:
+            logging.error(f"Erro ao ler revendedores.json local: {e}")
+
     if supabase:
         try:
             res = supabase.table("revendedores_bot").select("*").execute()
@@ -346,13 +354,6 @@ def carregar_revendedores_db() -> dict:
                     }
         except Exception as e:
             logging.error(f"Erro ao carregar revendedores do Supabase: {e}")
-
-    if not dados and os.path.exists("revendedores.json"):
-        try:
-            with open("revendedores.json", "r", encoding="utf-8") as f:
-                dados = json.load(f)
-        except Exception as e:
-            logging.error(f"Erro ao ler revendedores.json local: {e}")
 
     return dados
 
@@ -374,13 +375,20 @@ def salvar_revendedores_db(dados: dict):
                     "cadastrado_por": str(info.get("cadastrado_por", ADMIN_ID)),
                     "alerta_expiracao_enviado": bool(info.get("alerta_expiracao_enviado", False))
                 }
-                supabase.table("revendedores_bot").upsert(payload).execute()
+                supabase.table("revendedores_bot").upsert(payload, on_conflict="telegram_id").execute()
         except Exception as e:
             logging.error(f"Erro ao salvar revendedores no Supabase: {e}")
 
 # --- GERENCIAMENTO DE CONTAS DE STREAMING ---
 def carregar_contas_db() -> dict:
     dados = {}
+    if os.path.exists("contas.json"):
+        try:
+            with open("contas.json", "r", encoding="utf-8") as f:
+                dados = json.load(f)
+        except Exception as e:
+            logging.error(f"Erro ao ler contas.json local: {e}")
+
     if supabase:
         try:
             res = supabase.table("contas_bot").select("*").execute()
@@ -396,13 +404,6 @@ def carregar_contas_db() -> dict:
                     }
         except Exception as e:
             logging.error(f"Erro ao carregar contas do Supabase: {e}")
-
-    if not dados and os.path.exists("contas.json"):
-        try:
-            with open("contas.json", "r", encoding="utf-8") as f:
-                dados = json.load(f)
-        except Exception as e:
-            logging.error(f"Erro ao ler contas.json local: {e}")
 
     return dados
 
@@ -425,13 +426,20 @@ def salvar_contas_db(dados: dict):
                     "email_login": info.get("email_login", email_c),
                     "dono_id": str(info.get("dono_id", ADMIN_ID))
                 }
-                supabase.table("contas_bot").upsert(payload).execute()
+                supabase.table("contas_bot").upsert(payload, on_conflict="email").execute()
         except Exception as e:
             logging.error(f"Erro ao salvar contas no Supabase: {e}")
 
 # --- GERENCIAMENTO DE CLIENTES ---
 def carregar_clientes_db() -> dict:
     dados = {}
+    if os.path.exists("clientes.json"):
+        try:
+            with open("clientes.json", "r", encoding="utf-8") as f:
+                dados = json.load(f)
+        except Exception as e:
+            logging.error(f"Erro ao ler clientes.json local: {e}")
+
     if supabase:
         try:
             res = supabase.table("clientes_bot").select("*").execute()
@@ -442,21 +450,20 @@ def carregar_clientes_db() -> dict:
                     permitir = bool(row.get("permitir_sensivel", False))
                     criado = str(row.get("criado_por", ADMIN_ID))
                     alertas = row.get("alertas_enviados") or {}
-                    dados[t_id] = {
-                        "emails_permitidos": emails,
-                        "permitir_sensivel": permitir,
-                        "criado_por": criado,
-                        "alertas_enviados": alertas
-                    }
+                    
+                    if t_id not in dados:
+                        dados[t_id] = {
+                            "emails_permitidos": emails,
+                            "permitir_sensivel": permitir,
+                            "criado_por": criado,
+                            "alertas_enviados": alertas
+                        }
+                    else:
+                        dados[t_id]["emails_permitidos"].update(emails)
+                        if permitir:
+                            dados[t_id]["permitir_sensivel"] = True
         except Exception as e:
             logging.error(f"Erro ao carregar clientes do Supabase: {e}")
-
-    if not dados and os.path.exists("clientes.json"):
-        try:
-            with open("clientes.json", "r", encoding="utf-8") as f:
-                dados = json.load(f)
-        except Exception as e:
-            logging.error(f"Erro ao ler clientes.json local: {e}")
 
     for id_fixo, info_fixa in CLIENTES_FIXOS_PADRAO.items():
         if id_fixo not in dados:
@@ -488,7 +495,7 @@ def salvar_clientes_db(dados: dict):
                     "alertas_enviados": info.get("alertas_enviados", {}),
                     "updated_at": datetime.now(timezone.utc).isoformat()
                 }
-                supabase.table("clientes_bot").upsert(payload).execute()
+                supabase.table("clientes_bot").upsert(payload, on_conflict="telegram_id").execute()
         except Exception as e:
             logging.error(f"Erro ao salvar clientes no Supabase: {e}")
 
@@ -1539,9 +1546,6 @@ async def remover_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(f"❌ O e-mail não foi localizado no cadastro do cliente.", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
 
-# ==========================================
-# FUNÇÃO DE LISTAR CLIENTES (ATUALIZADA)
-# ==========================================
 async def listar_clientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id).strip()
     if not eh_revendedor(user_id):
@@ -1550,10 +1554,8 @@ async def listar_clientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     clientes = carregar_json("clientes.json")
     is_master = eh_admin_master(user_id)
 
-    # Filtra os clientes pertencentes a esta revenda (ou todos se for master)
     lista_filtrada = {k: v for k, v in clientes.items() if is_master or str(v.get("criado_por")) == user_id}
 
-    # Se o usuário passou um ID específico (ex: /listar 8018820201)
     if context.args:
         id_busca = str(context.args[0]).strip()
         if id_busca in lista_filtrada:
@@ -1877,7 +1879,7 @@ def main():
 
             app_master.add_handler(MessageHandler((filters.TEXT | filters.PHOTO) & ~filters.COMMAND, receber_mensagem_email))
 
-            print("🤖 Bot Master e Sistema Multi-Bot rodando com motor de busca original e botões atualizados!")
+            print("🤖 Bot Master e Sistema Multi-Bot rodando com motor de busca original e sincronização corrigida!")
             app_master.run_polling(poll_interval=1.0, timeout=20)
         except Exception as e:
             logging.error(f"Ocorreu uma queda temporária no Bot: {e}. Reconectando em 5 segundos...")
