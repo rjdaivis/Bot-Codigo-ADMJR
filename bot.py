@@ -1539,6 +1539,9 @@ async def remover_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(f"❌ O e-mail não foi localizado no cadastro do cliente.", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
 
+# ==========================================
+# FUNÇÃO DE LISTAR CLIENTES (ATUALIZADA)
+# ==========================================
 async def listar_clientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id).strip()
     if not eh_revendedor(user_id):
@@ -1547,7 +1550,21 @@ async def listar_clientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     clientes = carregar_json("clientes.json")
     is_master = eh_admin_master(user_id)
 
+    # Filtra os clientes pertencentes a esta revenda (ou todos se for master)
     lista_filtrada = {k: v for k, v in clientes.items() if is_master or str(v.get("criado_por")) == user_id}
+
+    # Se o usuário passou um ID específico (ex: /listar 8018820201)
+    if context.args:
+        id_busca = str(context.args[0]).strip()
+        if id_busca in lista_filtrada:
+            lista_filtrada = {id_busca: lista_filtrada[id_busca]}
+        else:
+            await update.message.reply_text(
+                f"❌ <b>Cliente Não Encontrado!</b>\n\nO ID <code>{id_busca}</code> não foi localizado na sua lista de autorizados.",
+                parse_mode="HTML",
+                reply_markup=obter_teclado_usuario(user_id)
+            )
+            return
 
     if not lista_filtrada:
         await update.message.reply_text("📋 <b>Nenhum cliente cadastrado por você.</b>", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
