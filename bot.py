@@ -16,7 +16,7 @@ from html.parser import HTMLParser
 
 from flask import Flask
 from supabase import create_client, Client
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -59,6 +59,35 @@ CLIENTES_FIXOS_PADRAO = {
 }
 
 APLICACOES_BOTS = {}
+
+# ==========================================
+# FUNÇÃO DE GERAR TECLADO DINÂMICO POR NÍVEL
+# ==========================================
+def obter_teclado_usuario(user_id: str) -> ReplyKeyboardMarkup:
+    user_id_str = str(user_id).strip()
+    
+    if eh_admin_master(user_id_str):
+        botoes = [
+            [KeyboardButton("👑 Painel Master"), KeyboardButton("💼 Revendedores")],
+            [KeyboardButton("🤖 Bots White-Label"), KeyboardButton("⚠️ Ver Erros")],
+            [KeyboardButton("📖 Como Usar"), KeyboardButton("🔑 Senhas de App")],
+            [KeyboardButton("⚠️ Reportar Erro / Print")]
+        ]
+    elif eh_revendedor(user_id_str):
+        botoes = [
+            [KeyboardButton("💼 Painel Revenda"), KeyboardButton("📋 Meus Clientes")],
+            [KeyboardButton("📧 Minhas Contas"), KeyboardButton("⚠️ Ver Erros")],
+            [KeyboardButton("📖 Como Usar"), KeyboardButton("🔑 Senhas de App")],
+            [KeyboardButton("⚠️ Reportar Erro / Print")]
+        ]
+    else:
+        # MENU SIMPLIFICADO APENAS PARA CLIENTES
+        botoes = [
+            [KeyboardButton("📖 Como Usar")],
+            [KeyboardButton("⚠️ Reportar Erro / Print")]
+        ]
+        
+    return ReplyKeyboardMarkup(botoes, resize_keyboard=True)
 
 # ==========================================
 # PARSER ESTRUTURADO DE HTML
@@ -147,6 +176,8 @@ def carregar_json(caminho: str) -> dict:
         return carregar_config_db()
     elif caminho == "bots.json":
         return carregar_bots_db()
+    elif caminho == "erros.json":
+        return carregar_erros_db()
 
     dados = {}
     try:
@@ -173,6 +204,9 @@ def salvar_json(caminho: str, dados: dict):
     elif caminho == "bots.json":
         salvar_bots_db(dados)
         return
+    elif caminho == "erros.json":
+        salvar_erros_db(dados)
+        return
 
     try:
         caminho_tmp = f"{caminho}.tmp"
@@ -181,6 +215,50 @@ def salvar_json(caminho: str, dados: dict):
         os.replace(caminho_tmp, caminho)
     except Exception as e:
         logging.error(f"Erro ao salvar {caminho}: {e}")
+
+# --- ARMAZENAMENTO DE ERROS REPORTADOS ---
+def carregar_erros_db() -> list:
+    dados = []
+    if supabase:
+        try:
+            res = supabase.table("erros_bot").select("*").order("created_at", desc=True).limit(20).execute()
+            if res.data:
+                return res.data
+        except Exception:
+            pass
+    if os.path.exists("erros.json"):
+        try:
+            with open("erros.json", "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return dados
+
+def salvar_erros_db(dados: list):
+    try:
+        with open("erros.json.tmp", "w", encoding="utf-8") as f:
+            json.dump(dados, f, indent=2, ensure_ascii=False)
+        os.replace("erros.json.tmp", "erros.json")
+    except Exception:
+        pass
+
+def salvar_novo_erro(user_id: str, mensagem: str, tem_foto: bool = False):
+    lista_erros = carregar_erros_db()
+    novo_item = {
+        "user_id": str(user_id),
+        "mensagem": mensagem,
+        "tem_foto": tem_foto,
+        "created_at": datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    }
+    lista_erros.insert(0, novo_item)
+    lista_erros = lista_erros[:50]
+    salvar_erros_db(lista_erros)
+
+    if supabase:
+        try:
+            supabase.table("erros_bot").insert(novo_item).execute()
+        except Exception:
+            pass
 
 # --- GERENCIAMENTO DE BOTS WHITE-LABEL ---
 def carregar_bots_db() -> dict:
@@ -844,41 +922,71 @@ async def verificar_alertas_vencimento(app):
             logging.error(f"Erro na rotina de alertas de vencimento: {err}")
 
 # ==========================================
-# TUTORIAL DE GERAR SENHAS DE APP
+# TUTORIAIS E REPORTADOR DE ERROS
 # ==========================================
 async def senhas_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto_senhas = (
         "🔑 <b>GUIA: COMO GERAR SENHA DE APLICATIVO POR PROVEDOR</b>\n\n"
-        "<i>Para cadastrar uma conta no bot com o comando <code>/addconta</code>, você não deve usar a senha normal do seu e-mail, e sim uma <b>Senha de Aplicativo (16 dígitos)</b>.</i>\n\n"
         "🔴 <b>GMAIL (@gmail.com):</b>\n"
-        "1️⃣ Acesse sua conta em: <a href=\"https://myaccount.google.com/security\">myaccount.google.com/security</a>\n"
-        "2️⃣ Ative a <b>Verificação em duas etapas</b> (caso não esteja ativa).\n"
-        "3️⃣ Pesquise por <b>'Senhas de app'</b> na barra de busca do Google Account.\n"
-        "4️⃣ Crie uma senha com o nome <code>Bot Telegram</code> e copie os 16 caracteres gerados.\n\n"
+        "1️⃣ Acesse: <a href=\"https://myaccount.google.com/security\">myaccount.google.com/security</a>\n"
+        "2️⃣ Ative a <b>Verificação em duas etapas</b>.\n"
+        "3️⃣ Busque por <b>'Senhas de app'</b> e gere uma nova para o bot.\n\n"
         "🔵 <b>OUTLOOK / HOTMAIL (@outlook.com / @hotmail.com):</b>\n"
-        "1️⃣ Acesse sua conta Microsoft em: <a href=\"https://account.microsoft.com/security\">account.microsoft.com/security</a>\n"
-        "2️⃣ Vá em <b>Opções de segurança avançadas</b> e ative a <b>Verificação em duas etapas</b>.\n"
-        "3️⃣ Procure a seção <b>'Senhas de aplicativo'</b> e clique em <b>Criar uma nova senha de aplicativo</b>.\n\n"
+        "1️⃣ Acesse: <a href=\"https://account.microsoft.com/security\">account.microsoft.com/security</a>\n"
+        "2️⃣ Vá em <b>Opções de segurança avançadas</b> > <b>Senhas de aplicativo</b>.\n\n"
         "🟣 <b>YAHOO (@yahoo.com):</b>\n"
-        "1️⃣ Acesse <a href=\"https://login.yahoo.com/account/security\">login.yahoo.com/account/security</a>\n"
-        "2️⃣ Na seção 'Segurança', clique em <b>Gerar senha de aplicativo</b>.\n"
-        "3️⃣ Selecione 'Outro aplicativo', digite <code>Bot Telegram</code> e copie os caracteres.\n\n"
-        "💡 <b>Exemplo de Comando para Cadastrar no Bot:</b>\n"
-        "<code>/addconta minhatela@gmail.com abcd efgh ijkl mnop</code>"
+        "1️⃣ Acesse: <a href=\"https://login.yahoo.com/account/security\">login.yahoo.com/account/security</a>\n"
+        "2️⃣ Clique em <b>Gerar senha de aplicativo</b>."
     )
-    await update.message.reply_text(texto_senhas, parse_mode="HTML", disable_web_page_preview=True)
+    if update.callback_query:
+        await update.callback_query.message.reply_text(texto_senhas, parse_mode="HTML", disable_web_page_preview=True)
+    else:
+        await update.message.reply_text(texto_senhas, parse_mode="HTML", disable_web_page_preview=True)
+
+async def reportar_erro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["aguardando_reporte"] = True
+    msg_texto = (
+        "📸 <b>Reportar Problema ao Suporte</b>\n\n"
+        "Por favor, envie um <b>print (foto da tela)</b> ou uma <b>mensagem detalhada</b> descrevendo o erro que você encontrou.\n\n"
+        "<i>Nosso suporte receberá sua mensagem imediatamente!</i>"
+    )
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.message.reply_text(msg_texto, parse_mode="HTML")
+    else:
+        await update.message.reply_text(msg_texto, parse_mode="HTML")
+
+async def listar_erros_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id).strip()
+    if not eh_revendedor(user_id):
+        return
+
+    erros = carregar_erros_db()
+    if not erros:
+        await update.message.reply_text("📋 <b>Nenhum erro foi reportado recentemente.</b>", parse_mode="HTML")
+        return
+
+    msg = "📋 <b>Últimos Erros Reportados:</b>\n\n"
+    for idx, item in enumerate(erros[:15], 1):
+        tem_f = "📸 com Print" if item.get("tem_foto") else "📝 Texto"
+        msg += f"<b>{idx}. ID Usuário:</b> <code>{item.get('user_id')}</code> ({tem_f})\n ├ 📅 Data: {item.get('created_at')}\n └ 💬 Relato: {item.get('mensagem')}\n\n"
+
+    await update.message.reply_text(msg, parse_mode="HTML")
 
 # ==========================================
 # COMANDOS E PAINEL / MENU DO BOT
 # ==========================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id).strip()
+    teclado_customizado = obter_teclado_usuario(user_id)
 
     keyboard = [
         [InlineKeyboardButton("📖 Como Usar / Tutorial", callback_data="tutorial")],
-        [InlineKeyboardButton("🔑 Como Gerar Senhas de App", callback_data="tutorial_senhas")]
+        [InlineKeyboardButton("⚠️ Reportar Problema / Print", callback_data="reportar_erro")]
     ]
+    
     if eh_revendedor(user_id):
+        keyboard.insert(1, [InlineKeyboardButton("🔑 Como Gerar Senhas de App", callback_data="tutorial_senhas")])
         keyboard.append([InlineKeyboardButton("⚙️ Painel de Controle / Menu", callback_data="menu_admin")])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -887,9 +995,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"👋 <b>Central de Liberação de Códigos</b>\n\n"
         f"🆔 <b>Seu ID do Telegram:</b> <code>{user_id}</code>\n\n"
         f"Envie o e-mail cadastrado abaixo para buscar códigos/links recentes.\n\n"
-        f"<i>Dúvidas de como usar? Clique nos botões abaixo 👇</i>",
+        f"<i>Dúvidas ou recursos? Utilize o menu no rodapé do teclado 👇</i>",
         parse_mode="HTML",
-        reply_markup=reply_markup
+        reply_markup=teclado_customizado
     )
 
 async def menu_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -906,7 +1014,8 @@ async def menu_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
         texto_menu = (
             "👑 <b>PAINEL MASTER ADM</b>\n\n"
             "🌐 <b>Domínios Suportados:</b> Gmail, Outlook/Hotmail e Yahoo.\n"
-            "💡 Use o comando <code>/senhas</code> para ver o tutorial de Senhas de App.\n\n"
+            "💡 Use o comando <code>/senhas</code> para ver o tutorial de Senhas de App.\n"
+            "⚠️ Use o comando <code>/erros</code> para ver os relatos com prints enviadas pelos clientes/revendas.\n\n"
             "<b>Gerenciamento de Revendedores:</b>\n"
             "• <code>/addrevenda ID_TELEGRAM DIAS_OU_DATA</code> - Adicionar Revendedor\n"
             "• <code>/delrevenda ID_TELEGRAM</code> - Remover Revendedor\n"
@@ -930,7 +1039,8 @@ async def menu_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
         texto_menu = (
             "💼 <b>PAINEL DO REVENDEDOR</b>\n\n"
             "🌐 <b>Domínios Suportados:</b> Gmail, Outlook/Hotmail e Yahoo.\n"
-            "🔑 Use o comando <code>/senhas</code> para ver como gerar a Senha de App do seu e-mail.\n\n"
+            "🔑 Use o comando <code>/senhas</code> para ver como gerar a Senha de App.\n"
+            "⚠️ Use o comando <code>/erros</code> para ver relatos de erros dos seus clientes.\n\n"
             "<b>Gerenciamento de Suas Contas:</b>\n"
             "• <code>/addconta EMAIL SENHA_APP</code> - Cadastrar seu E-mail\n"
             "• <code>/delconta EMAIL</code> - Remover seu E-mail\n"
@@ -958,9 +1068,11 @@ async def tutorial_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await query.message.reply_text(texto_tutorial, parse_mode="HTML")
     elif query.data == "tutorial_senhas":
-        await senhas_comando(query, context)
+        await senhas_comando(update, context)
+    elif query.data == "reportar_erro":
+        await reportar_erro_callback(update, context)
     elif query.data == "menu_admin":
-        await menu_comando(query, context)
+        await menu_comando(update, context)
 
 # ==========================================
 # GERENCIAMENTO DE BOTS WHITE-LABEL (MASTER ADM)
@@ -1468,8 +1580,88 @@ async def listar_clientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id).strip()
-    email_original = update.message.text.strip().lower()
+    texto_recebido = update.message.text.strip() if update.message.text else ""
 
+    # GATILHOS DOS BOTÕES DO TECLADO PERSONALIZADO POR NÍVEL
+    if texto_recebido in ["👑 Painel Master", "💼 Painel Revenda"]:
+        await menu_comando(update, context)
+        return
+
+    elif texto_recebido == "📋 Meus Clientes":
+        await listar_clientes(update, context)
+        return
+
+    elif texto_recebido == "📧 Minhas Contas":
+        await listar_contas_comando(update, context)
+        return
+
+    elif texto_recebido == "💼 Revendedores":
+        await listar_revendas_comando(update, context)
+        return
+
+    elif texto_recebido == "🤖 Bots White-Label":
+        await listar_bots_comando(update, context)
+        return
+
+    elif texto_recebido in ["⚠️ Ver Erros", "⚠️ Ver Erros Geral"]:
+        await listar_erros_comando(update, context)
+        return
+
+    elif texto_recebido in ["📖 Como Usar", "📖 Como Usar / Tutorial"]:
+        texto_tutorial = (
+            "🤖 <b>COMO USAR O BOT (PASSO A PASSO):</b>\n\n"
+            "1️⃣ Na sua TV, dê preferência para a opção <b>'Estou viajando'</b> ou <b>'Atualizar residência'</b> e clique em <b>Enviar e-mail/Código</b>.\n\n"
+            "2️⃣ Digite <b>APENAS o e-mail exato</b> da conta aqui neste chat.\n\n"
+            "3️⃣ Se receber um <b>código</b>, digite-o na TV. Se receber um <b>link em azul</b>, basta clicar nele para liberar a tela."
+        )
+        await update.message.reply_text(texto_tutorial, parse_mode="HTML")
+        return
+
+    elif texto_recebido == "🔑 Senhas de App":
+        if eh_revendedor(user_id):
+            await senhas_comando(update, context)
+        return
+
+    elif texto_recebido == "⚠️ Reportar Erro / Print":
+        await reportar_erro_callback(update, context)
+        return
+
+    # TRATAMENTO DE REPORTE DE ERROS (TEXTO OU FOTO/PRINT)
+    if context.user_data.get("aguardando_reporte"):
+        context.user_data["aguardando_reporte"] = False
+        legenda_ou_texto = update.message.caption or update.message.text or "Sem descrição fornecida."
+        tem_foto = bool(update.message.photo)
+
+        salvar_novo_erro(user_id, legenda_ou_texto, tem_foto)
+
+        clientes = carregar_json("clientes.json")
+        dono_revenda_id = str(clientes.get(user_id, {}).get("criado_por", ADMIN_ID))
+
+        notificacao_admin = (
+            f"🚨 <b>NOVO PROBLEMA REPORTADO!</b>\n\n"
+            f"👤 <b>Usuário ID:</b> <code>{user_id}</code>\n"
+            f"📅 <b>Data:</b> {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n"
+            f"💬 <b>Relato:</b> {legenda_ou_texto}"
+        )
+
+        for destino_id in set([ADMIN_ID, dono_revenda_id]):
+            try:
+                if tem_foto:
+                    foto_file_id = update.message.photo[-1].file_id
+                    await context.bot.send_photo(chat_id=int(destino_id), photo=foto_file_id, caption=notificacao_admin, parse_mode="HTML")
+                else:
+                    await context.bot.send_message(chat_id=int(destino_id), text=notificacao_admin, parse_mode="HTML")
+            except Exception as e:
+                logging.error(f"Erro ao notificar admin/revenda {destino_id}: {e}")
+
+        await update.message.reply_text(
+            "✅ <b>Seu relato e print foram enviados com sucesso ao nosso suporte!</b>\n\nMuito obrigado pelo aviso. Vamos analisar e corrigir o mais rápido possível.",
+            parse_mode="HTML"
+        )
+        return
+
+    # CONTINUAÇÃO DA BUSCA DE CÓDIGOS DE E-MAIL
+    email_original = texto_recebido.lower()
     bot_dono_id = context.bot_data.get("dono_id")
 
     clientes = carregar_json("clientes.json")
@@ -1576,6 +1768,7 @@ def construir_aplicacao_bot(token: str, dono_id: str = None):
     app.add_handler(CommandHandler("admin", menu_comando))
     app.add_handler(CommandHandler("senhas", senhas_comando))
     app.add_handler(CommandHandler("tutorial_senhas", senhas_comando))
+    app.add_handler(CommandHandler("erros", listar_erros_comando))
     app.add_handler(CallbackQueryHandler(tutorial_callback))
 
     # Comandos Master
@@ -1597,8 +1790,8 @@ def construir_aplicacao_bot(token: str, dono_id: str = None):
     app.add_handler(CommandHandler("remover", remover_comando))
     app.add_handler(CommandHandler("listar", listar_clientes))
 
-    # Captura de Texto
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receber_mensagem_email))
+    # Captura de Texto e Fotos (Prints)
+    app.add_handler(MessageHandler((filters.TEXT | filters.PHOTO) & ~filters.COMMAND, receber_mensagem_email))
 
     return app
 
@@ -1615,7 +1808,7 @@ async def iniciar_instancia_bot(token: str, dono_id: str = None):
 
 async def post_init(application):
     asyncio.create_task(verificar_alertas_vencimento(application))
-    
+
     bots_cadastrados = carregar_json("bots.json")
     for token_bot, info in bots_cadastrados.items():
         if token_bot != TOKEN_TELEGRAM_MASTER:
@@ -1638,6 +1831,7 @@ def main():
             app_master.add_handler(CommandHandler("admin", menu_comando))
             app_master.add_handler(CommandHandler("senhas", senhas_comando))
             app_master.add_handler(CommandHandler("tutorial_senhas", senhas_comando))
+            app_master.add_handler(CommandHandler("erros", listar_erros_comando))
             app_master.add_handler(CallbackQueryHandler(tutorial_callback))
 
             app_master.add_handler(CommandHandler("addbot", add_bot_comando))
@@ -1657,9 +1851,9 @@ def main():
             app_master.add_handler(CommandHandler("remover", remover_comando))
             app_master.add_handler(CommandHandler("listar", listar_clientes))
 
-            app_master.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receber_mensagem_email))
+            app_master.add_handler(MessageHandler((filters.TEXT | filters.PHOTO) & ~filters.COMMAND, receber_mensagem_email))
 
-            print("🤖 Bot Master e Sistema Multi-Bot White-Label ativos com suporte a múltiplos provedores!")
+            print("🤖 Bot Master e Sistema Multi-Bot rodando com reporte de erros liberado para revendedores!")
             app_master.run_polling(poll_interval=1.0, timeout=20)
         except Exception as e:
             logging.error(f"Ocorreu uma queda temporária no Bot: {e}. Reconectando em 5 segundos...")
