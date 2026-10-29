@@ -86,7 +86,7 @@ def obter_teclado_usuario(user_id: str) -> ReplyKeyboardMarkup:
             [KeyboardButton("⚠️ Reportar Erro / Print")]
         ]
         
-    return ReplyKeyboardMarkup(botoes, resize_keyboard=True)
+    return ReplyKeyboardMarkup(botoes, resize_keyboard=True, is_persistent=True)
 
 # ==========================================
 # PARSER ESTRUTURADO DE HTML
@@ -924,6 +924,7 @@ async def verificar_alertas_vencimento(app):
 # TUTORIAIS E REPORTADOR DE ERROS
 # ==========================================
 async def senhas_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id).strip()
     texto_senhas = (
         "🔑 <b>GUIA: COMO GERAR SENHA DE APLICATIVO POR PROVEDOR</b>\n\n"
         "🔴 <b>GMAIL (@gmail.com):</b>\n"
@@ -940,9 +941,10 @@ async def senhas_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.callback_query:
         await update.callback_query.message.reply_text(texto_senhas, parse_mode="HTML", disable_web_page_preview=True)
     else:
-        await update.message.reply_text(texto_senhas, parse_mode="HTML", disable_web_page_preview=True)
+        await update.message.reply_text(texto_senhas, parse_mode="HTML", disable_web_page_preview=True, reply_markup=obter_teclado_usuario(user_id))
 
 async def reportar_erro_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id).strip()
     context.user_data["aguardando_reporte"] = True
     msg_texto = (
         "📸 <b>Reportar Problema ao Suporte</b>\n\n"
@@ -953,7 +955,7 @@ async def reportar_erro_callback(update: Update, context: ContextTypes.DEFAULT_T
         await update.callback_query.answer()
         await update.callback_query.message.reply_text(msg_texto, parse_mode="HTML")
     else:
-        await update.message.reply_text(msg_texto, parse_mode="HTML")
+        await update.message.reply_text(msg_texto, parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
 
 async def listar_erros_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id).strip()
@@ -962,7 +964,7 @@ async def listar_erros_comando(update: Update, context: ContextTypes.DEFAULT_TYP
 
     erros = carregar_erros_db()
     if not erros:
-        await update.message.reply_text("📋 <b>Nenhum erro foi reportado recentemente.</b>", parse_mode="HTML")
+        await update.message.reply_text("📋 <b>Nenhum erro foi reportado recentemente.</b>", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
         return
 
     msg = "📋 <b>Últimos Erros Reportados:</b>\n\n"
@@ -970,7 +972,7 @@ async def listar_erros_comando(update: Update, context: ContextTypes.DEFAULT_TYP
         tem_f = "📸 com Print" if item.get("tem_foto") else "📝 Texto"
         msg += f"<b>{idx}. ID Usuário:</b> <code>{item.get('user_id')}</code> ({tem_f})\n ├ 📅 Data: {item.get('created_at')}\n └ 💬 Relato: {item.get('mensagem')}\n\n"
 
-    await update.message.reply_text(msg, parse_mode="HTML")
+    await update.message.reply_text(msg, parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
 
 # ==========================================
 # COMANDOS E PAINEL / MENU DO BOT
@@ -978,17 +980,6 @@ async def listar_erros_comando(update: Update, context: ContextTypes.DEFAULT_TYP
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id).strip()
     teclado_customizado = obter_teclado_usuario(user_id)
-
-    keyboard = [
-        [InlineKeyboardButton("📖 Como Usar / Tutorial", callback_data="tutorial")],
-        [InlineKeyboardButton("⚠️ Reportar Problema / Print", callback_data="reportar_erro")]
-    ]
-    
-    if eh_revendedor(user_id):
-        keyboard.insert(1, [InlineKeyboardButton("🔑 Como Gerar Senhas de App", callback_data="tutorial_senhas")])
-        keyboard.append([InlineKeyboardButton("⚙️ Painel de Controle / Menu", callback_data="menu_admin")])
-
-    reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_text(
         f"👋 <b>Central de Liberação de Códigos</b>\n\n"
@@ -1001,8 +992,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def menu_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id).strip()
+    teclado_customizado = obter_teclado_usuario(user_id)
+
     if not eh_revendedor(user_id):
-        await update.message.reply_text("⛔ Você não possui acesso ao painel de administração.", parse_mode="HTML")
+        await update.message.reply_text("⛔ Você não possui acesso ao painel de administração.", parse_mode="HTML", reply_markup=teclado_customizado)
         return
 
     is_master = eh_admin_master(user_id)
@@ -1051,7 +1044,7 @@ async def menu_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• <code>/remover ID_CLIENTE EMAIL</code> - Remover Cliente"
         )
 
-    await update.message.reply_text(texto_menu, parse_mode="HTML")
+    await update.message.reply_text(texto_menu, parse_mode="HTML", reply_markup=teclado_customizado)
 
 async def tutorial_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1085,7 +1078,8 @@ async def add_bot_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "⚠️ <b>Uso correto:</b> <code>/addbot TOKEN ID_REVENDEDOR</code>\n\n"
             "Exemplo: <code>/addbot 123456789:ABCdefGHI... 7496198484</code>",
-            parse_mode="HTML"
+            parse_mode="HTML",
+            reply_markup=obter_teclado_usuario(user_id)
         )
         return
 
@@ -1104,7 +1098,8 @@ async def add_bot_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"👤 <b>Dono do Bot (Revenda):</b> <code>{dono_revenda_id}</code>\n"
         f"🔑 <b>Token:</b> <code>{token_bot[:10]}...</code>\n\n"
         f"Este bot agora está rodando e responderá aos clientes dessa revenda!",
-        parse_mode="HTML"
+        parse_mode="HTML",
+        reply_markup=obter_teclado_usuario(user_id)
     )
 
 async def del_bot_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1113,7 +1108,7 @@ async def del_bot_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if not context.args:
-        await update.message.reply_text("⚠️ <b>Uso correto:</b> <code>/delbot TOKEN</code>", parse_mode="HTML")
+        await update.message.reply_text("⚠️ <b>Uso correto:</b> <code>/delbot TOKEN</code>", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
         return
 
     token_target = str(context.args[0]).strip()
@@ -1131,9 +1126,9 @@ async def del_bot_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logging.error(f"Erro ao parar bot: {e}")
 
-        await update.message.reply_text(f"🗑️ Bot removido e desativado com sucesso!", parse_mode="HTML")
+        await update.message.reply_text(f"🗑️ Bot removido e desativado com sucesso!", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
     else:
-        await update.message.reply_text("❌ Token de Bot não localizado.", parse_mode="HTML")
+        await update.message.reply_text("❌ Token de Bot não localizado.", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
 
 async def listar_bots_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id).strip()
@@ -1142,14 +1137,14 @@ async def listar_bots_comando(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     bots = carregar_json("bots.json")
     if not bots:
-        await update.message.reply_text("📋 <b>Nenhum bot White-Label ativo no momento.</b>", parse_mode="HTML")
+        await update.message.reply_text("📋 <b>Nenhum bot White-Label ativo no momento.</b>", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
         return
 
     msg = "🤖 <b>Lista de Bots White-Label Ativos:</b>\n\n"
     for tok, info in bots.items():
         msg += f"👤 <b>Dono ID:</b> <code>{info.get('dono_id')}</code>\n └ 🔑 Token: <code>{tok[:15]}...</code>\n\n"
 
-    await update.message.reply_text(msg, parse_mode="HTML")
+    await update.message.reply_text(msg, parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
 
 # ==========================================
 # GERENCIAMENTO DE REVENDEDORES (MASTER ADM)
@@ -1165,7 +1160,8 @@ async def add_revenda_comando(update: Update, context: ContextTypes.DEFAULT_TYPE
             "Exemplos:\n"
             "• <code>/addrevenda 123456789 30</code>\n"
             "• <code>/addrevenda 123456789 28-11-2026</code>",
-            parse_mode="HTML"
+            parse_mode="HTML",
+            reply_markup=obter_teclado_usuario(user_id)
         )
         return
 
@@ -1179,7 +1175,7 @@ async def add_revenda_comando(update: Update, context: ContextTypes.DEFAULT_TYPE
     else:
         exp_date = converter_para_date(arg_tempo)
         if not exp_date:
-            await update.message.reply_text("⚠️ Data inválida! Use dias ou formato <b>DD-MM-AAAA</b>.", parse_mode="HTML")
+            await update.message.reply_text("⚠️ Data inválida! Use dias ou formato <b>DD-MM-AAAA</b>.", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
             return
         dt_expira = exp_date
 
@@ -1200,7 +1196,8 @@ async def add_revenda_comando(update: Update, context: ContextTypes.DEFAULT_TYPE
         f"👤 <b>ID Revenda:</b> <code>{novo_id_revenda}</code>\n"
         f"📅 <b>Válido até:</b> {data_exibicao}\n\n"
         f"Agora este usuário pode cadastrar e-mails (<code>/addconta</code>) e gerenciar clientes (<code>/autorizar</code>).",
-        parse_mode="HTML"
+        parse_mode="HTML",
+        reply_markup=obter_teclado_usuario(user_id)
     )
 
 async def del_revenda_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1209,7 +1206,7 @@ async def del_revenda_comando(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     if not context.args:
-        await update.message.reply_text("⚠️ <b>Uso correto:</b> <code>/delrevenda ID_TELEGRAM</code>", parse_mode="HTML")
+        await update.message.reply_text("⚠️ <b>Uso correto:</b> <code>/delrevenda ID_TELEGRAM</code>", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
         return
 
     target_id = str(context.args[0]).strip()
@@ -1218,9 +1215,9 @@ async def del_revenda_comando(update: Update, context: ContextTypes.DEFAULT_TYPE
     if target_id in revendedores:
         del revendedores[target_id]
         salvar_json("revendedores.json", revendedores)
-        await update.message.reply_text(f"🗑️ Revendedor <code>{target_id}</code> removido!", parse_mode="HTML")
+        await update.message.reply_text(f"🗑️ Revendedor <code>{target_id}</code> removido!", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
     else:
-        await update.message.reply_text(f"❌ Revendedor <code>{target_id}</code> não encontrado.", parse_mode="HTML")
+        await update.message.reply_text(f"❌ Revendedor <code>{target_id}</code> não encontrado.", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
 
 async def listar_revendas_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id).strip()
@@ -1229,7 +1226,7 @@ async def listar_revendas_comando(update: Update, context: ContextTypes.DEFAULT_
 
     revendedores = carregar_json("revendedores.json")
     if not revendedores:
-        await update.message.reply_text("📋 <b>Nenhum revendedor cadastrado.</b>", parse_mode="HTML")
+        await update.message.reply_text("📋 <b>Nenhum revendedor cadastrado.</b>", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
         return
 
     contas = carregar_json("contas.json")
@@ -1249,7 +1246,7 @@ async def listar_revendas_comando(update: Update, context: ContextTypes.DEFAULT_
         total_clientes = sum(1 for cl in clientes.values() if str(cl.get("criado_por")) == r_id)
         msg += f"👤 <b>ID:</b> <code>{r_id}</code>\n ├ 📅 Validade: {status_txt}\n ├ 📧 Contas no Banco: <b>{total_contas}</b>\n └ 👥 Clientes Ativos: <b>{total_clientes}</b>\n\n"
 
-    await update.message.reply_text(msg, parse_mode="HTML")
+    await update.message.reply_text(msg, parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
 
 async def toggle_notificacoes_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id).strip()
@@ -1257,7 +1254,7 @@ async def toggle_notificacoes_comando(update: Update, context: ContextTypes.DEFA
         return
 
     if not context.args or context.args[0].lower() not in ["sim", "nao", "s", "n", "true", "false", "on", "off"]:
-        await update.message.reply_text("⚠️ <b>Uso correto:</b> <code>/notificacoes sim</code> ou <code>/notificacoes nao</code>", parse_mode="HTML")
+        await update.message.reply_text("⚠️ <b>Uso correto:</b> <code>/notificacoes sim</code> ou <code>/notificacoes nao</code>", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
         return
 
     opcao = context.args[0].lower() in ["sim", "s", "true", "on"]
@@ -1266,7 +1263,7 @@ async def toggle_notificacoes_comando(update: Update, context: ContextTypes.DEFA
     salvar_json("config.json", config)
 
     status_txt = "ATIVADAS 🔔 (O bot avisará os clientes 1 dia antes do vencimento)" if opcao else "DESATIVADAS 🔕"
-    await update.message.reply_text(f"⚙️ <b>Notificações de Clientes:</b> {status_txt}", parse_mode="HTML")
+    await update.message.reply_text(f"⚙️ <b>Notificações de Clientes:</b> {status_txt}", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
 
 # ==========================================
 # GERENCIAMENTO DE CONTAS DO BANCO
@@ -1281,7 +1278,8 @@ async def add_conta_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "⚠️ <b>Uso correto:</b> <code>/addconta email@gmail.com SENHA_DO_APP</code>\n\n"
             "Exemplo: <code>/addconta cliente1@gmail.com abcd efgh ijkl mnop</code>\n\n"
             "<i>Caso tenha dúvidas sobre como gerar a Senha de App do Gmail, Outlook ou Yahoo, use <code>/senhas</code></i>",
-            parse_mode="HTML"
+            parse_mode="HTML",
+            reply_markup=obter_teclado_usuario(user_id)
         )
         return
 
@@ -1289,14 +1287,14 @@ async def add_conta_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
     senha_conta = " ".join(context.args[1:]).strip()
 
     if not re.match(r"^[\w\.\+-]+@[\w\.-]+\.\w+$", email_conta):
-        await update.message.reply_text("⚠️ Insira um e-mail válido.", parse_mode="HTML")
+        await update.message.reply_text("⚠️ Insira um e-mail válido.", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
         return
 
     contas = carregar_json("contas.json")
 
     if email_conta in contas and not eh_admin_master(user_id):
         if str(contas[email_conta].get("dono_id")) != user_id:
-            await update.message.reply_text("⛔ Este e-mail pertence a outro revendedor!", parse_mode="HTML")
+            await update.message.reply_text("⛔ Este e-mail pertence a outro revendedor!", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
             return
 
     host_imap = "imap.gmail.com"
@@ -1320,7 +1318,8 @@ async def add_conta_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🔑 <b>Senha cadastrada:</b> OK\n"
         f"👑 <b>Dono do Registro:</b> <code>{user_id}</code>\n\n"
         f"Agora você pode liberar acesso para seus clientes com <code>/autorizar ID_CLIENTE {email_conta} DIAS</code>",
-        parse_mode="HTML"
+        parse_mode="HTML",
+        reply_markup=obter_teclado_usuario(user_id)
     )
 
 async def del_conta_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1329,7 +1328,7 @@ async def del_conta_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if not context.args:
-        await update.message.reply_text("⚠️ <b>Uso correto:</b> <code>/delconta email@gmail.com</code>", parse_mode="HTML")
+        await update.message.reply_text("⚠️ <b>Uso correto:</b> <code>/delconta email@gmail.com</code>", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
         return
 
     email_target = str(context.args[0]).strip().lower()
@@ -1338,14 +1337,14 @@ async def del_conta_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if email_target in contas:
         dono_id = str(contas[email_target].get("dono_id"))
         if not eh_admin_master(user_id) and dono_id != user_id:
-            await update.message.reply_text("⛔ Você não tem permissão para remover esta conta.", parse_mode="HTML")
+            await update.message.reply_text("⛔ Você não tem permissão para remover esta conta.", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
             return
 
         del contas[email_target]
         salvar_json("contas.json", contas)
-        await update.message.reply_text(f"🗑️ Conta <code>{email_target}</code> removida do banco!", parse_mode="HTML")
+        await update.message.reply_text(f"🗑️ Conta <code>{email_target}</code> removida do banco!", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
     else:
-        await update.message.reply_text(f"❌ Conta <code>{email_target}</code> não encontrada.", parse_mode="HTML")
+        await update.message.reply_text(f"❌ Conta <code>{email_target}</code> não encontrada.", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
 
 async def listar_contas_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id).strip()
@@ -1358,7 +1357,7 @@ async def listar_contas_comando(update: Update, context: ContextTypes.DEFAULT_TY
     contas_filtradas = {e: c for e, c in contas.items() if is_master or str(c.get("dono_id")) == user_id}
 
     if not contas_filtradas:
-        await update.message.reply_text("📋 <b>Você não possui nenhuma conta cadastrada no banco.</b>", parse_mode="HTML")
+        await update.message.reply_text("📋 <b>Você não possui nenhuma conta cadastrada no banco.</b>", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
         return
 
     msg = "📋 <b>Contas de Streaming Cadastradas:</b>\n\n"
@@ -1366,7 +1365,7 @@ async def listar_contas_comando(update: Update, context: ContextTypes.DEFAULT_TY
         dono_str = f" | Dono: <code>{info.get('dono_id')}</code>" if is_master else ""
         msg += f"📧 <code>{email_c}</code>{dono_str}\n"
 
-    await update.message.reply_text(msg, parse_mode="HTML")
+    await update.message.reply_text(msg, parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
 
 # ==========================================
 # GERENCIAMENTO DE CLIENTES
@@ -1386,7 +1385,8 @@ async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if email_cliente_raw not in contas or str(contas[email_cliente_raw].get("dono_id")) != user_id:
                 await update.message.reply_text(
                     f"⛔ <b>Acesso Negado!</b>\n\nO e-mail <code>{email_cliente_raw}</code> não está cadastrado no seu banco. Adicione-o primeiro com <code>/addconta</code>.",
-                    parse_mode="HTML"
+                    parse_mode="HTML",
+                    reply_markup=obter_teclado_usuario(user_id)
                 )
                 return
 
@@ -1403,7 +1403,7 @@ async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             exp_date = converter_para_date(arg_terceiro)
             if not exp_date:
-                await update.message.reply_text("⚠️ <b>Validade inválida!</b> Use número de dias (ex: <code>30</code>) ou data (ex: <code>28-11-2026</code>).", parse_mode="HTML")
+                await update.message.reply_text("⚠️ <b>Validade inválida!</b> Use número de dias (ex: <code>30</code>) ou data (ex: <code>28-11-2026</code>).", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
                 return
             dt_expira = exp_date
             dias = (dt_expira - hoje).days
@@ -1439,22 +1439,25 @@ async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"👤 <b>ID Cliente:</b> <code>{user_id_cliente}</code>\n"
             f"📧 <b>E-mail Liberado:</b> <code>{email_cliente_raw}</code>\n"
             f"📅 <b>Válido até:</b> {data_validade_exibicao} ({dias} dias)\n",
-            parse_mode="HTML"
+            parse_mode="HTML",
+            reply_markup=obter_teclado_usuario(user_id)
         )
     except Exception as e:
         logging.error(f"Erro ao autorizar cliente: {e}")
         await update.message.reply_text(
             "⚠️ <b>Uso correto:</b> <code>/autorizar ID_CLIENTE EMAIL DIAS_OU_DATA</code>\n\n"
             "Exemplo: <code>/autorizar 7219528497 email@gmail.com 30</code>",
-            parse_mode="HTML"
+            parse_mode="HTML",
+            reply_markup=obter_teclado_usuario(user_id)
         )
 
 async def vip_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not eh_admin_master(update.effective_user.id):
+    user_id = str(update.effective_user.id).strip()
+    if not eh_admin_master(user_id):
         return
 
     if len(context.args) < 2:
-        await update.message.reply_text("⚠️ <b>Uso correto:</b> <code>/vip ID_CLIENTE sim/nao</code>", parse_mode="HTML")
+        await update.message.reply_text("⚠️ <b>Uso correto:</b> <code>/vip ID_CLIENTE sim/nao</code>", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
         return
 
     target_id = str(context.args[0]).strip()
@@ -1469,7 +1472,7 @@ async def vip_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
     salvar_json("clientes.json", clientes)
 
     txt_status = "ATIVADO ⭐️" if status_vip else "DESATIVADO"
-    await update.message.reply_text(f"👑 <b>Status VIP do ID <code>{target_id}</code>:</b> {txt_status}", parse_mode="HTML")
+    await update.message.reply_text(f"👑 <b>Status VIP do ID <code>{target_id}</code>:</b> {txt_status}", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
 
 async def editar_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id).strip()
@@ -1477,7 +1480,7 @@ async def editar_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if len(context.args) < 3:
-        await update.message.reply_text("⚠️ <b>Uso correto:</b> <code>/editar ID_CLIENTE EMAIL DD-MM-AAAA</code>", parse_mode="HTML")
+        await update.message.reply_text("⚠️ <b>Uso correto:</b> <code>/editar ID_CLIENTE EMAIL DD-MM-AAAA</code>", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
         return
 
     target_id = str(context.args[0]).strip()
@@ -1486,12 +1489,12 @@ async def editar_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     clientes = carregar_json("clientes.json")
     if target_id not in clientes or target_email not in clientes[target_id].get("emails_permitidos", {}):
-        await update.message.reply_text(f"❌ E-mail <code>{target_email}</code> não encontrado para este cliente.", parse_mode="HTML")
+        await update.message.reply_text(f"❌ E-mail <code>{target_email}</code> não encontrado para este cliente.", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
         return
 
     criado_por = str(clientes[target_id].get("criado_por", ADMIN_ID))
     if not eh_admin_master(user_id) and criado_por != user_id:
-        await update.message.reply_text("⛔ Você não tem permissão para editar este cliente.", parse_mode="HTML")
+        await update.message.reply_text("⛔ Você não tem permissão para editar este cliente.", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
         return
 
     if nova_opcao in ["sem_data", "semdata", "ilimitado"]:
@@ -1500,7 +1503,7 @@ async def editar_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         exp_date = converter_para_date(nova_opcao)
         if not exp_date:
-            await update.message.reply_text("⚠️ Data inválida! Use o formato <b>DD-MM-AAAA</b>.", parse_mode="HTML")
+            await update.message.reply_text("⚠️ Data inválida! Use o formato <b>DD-MM-AAAA</b>.", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
             return
         clientes[target_id]["emails_permitidos"][target_email] = exp_date.strftime("%Y-%m-%d")
         data_exib = exp_date.strftime("%d-%m-%Y")
@@ -1509,7 +1512,7 @@ async def editar_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
         clientes[target_id]["alertas_enviados"][target_email] = False
 
     salvar_json("clientes.json", clientes)
-    await update.message.reply_text(f"✏️ Data atualizada para {data_exib}!", parse_mode="HTML")
+    await update.message.reply_text(f"✏️ Data atualizada para {data_exib}!", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
 
 async def remover_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id).strip()
@@ -1517,7 +1520,7 @@ async def remover_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if len(context.args) < 2:
-        await update.message.reply_text("⚠️ <b>Uso correto:</b> <code>/remover ID_CLIENTE EMAIL</code>", parse_mode="HTML")
+        await update.message.reply_text("⚠️ <b>Uso correto:</b> <code>/remover ID_CLIENTE EMAIL</code>", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
         return
 
     target_id = str(context.args[0]).strip()
@@ -1527,14 +1530,14 @@ async def remover_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if target_id in clientes and target_email in clientes[target_id].get("emails_permitidos", {}):
         criado_por = str(clientes[target_id].get("criado_por", ADMIN_ID))
         if not eh_admin_master(user_id) and criado_por != user_id:
-            await update.message.reply_text("⛔ Você não tem permissão para remover este cliente.", parse_mode="HTML")
+            await update.message.reply_text("⛔ Você não tem permissão para remover este cliente.", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
             return
 
         del clientes[target_id]["emails_permitidos"][target_email]
         salvar_json("clientes.json", clientes)
-        await update.message.reply_text(f"🗑️ E-mail <code>{target_email}</code> removido do ID <code>{target_id}</code>!", parse_mode="HTML")
+        await update.message.reply_text(f"🗑️ E-mail <code>{target_email}</code> removido do ID <code>{target_id}</code>!", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
     else:
-        await update.message.reply_text(f"❌ O e-mail não foi localizado no cadastro do cliente.", parse_mode="HTML")
+        await update.message.reply_text(f"❌ O e-mail não foi localizado no cadastro do cliente.", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
 
 async def listar_clientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id).strip()
@@ -1547,7 +1550,7 @@ async def listar_clientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lista_filtrada = {k: v for k, v in clientes.items() if is_master or str(v.get("criado_por")) == user_id}
 
     if not lista_filtrada:
-        await update.message.reply_text("📋 <b>Nenhum cliente cadastrado por você.</b>", parse_mode="HTML")
+        await update.message.reply_text("📋 <b>Nenhum cliente cadastrado por você.</b>", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
         return
 
     hoje = datetime.now().date()
@@ -1573,9 +1576,9 @@ async def listar_clientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if len(mensagem) > 4000:
         for x in range(0, len(mensagem), 4000):
-            await update.message.reply_text(mensagem[x:x+4000], parse_mode="HTML")
+            await update.message.reply_text(mensagem[x:x+4000], parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
     else:
-        await update.message.reply_text(mensagem, parse_mode="HTML")
+        await update.message.reply_text(mensagem, parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
 
 async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id).strip()
@@ -1613,7 +1616,7 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
             "2️⃣ Digite <b>APENAS o e-mail exato</b> da conta aqui neste chat.\n\n"
             "3️⃣ Se receber um <b>código</b>, digite-o na TV. Se receber um <b>link em azul</b>, basta clicar nele para liberar a tela."
         )
-        await update.message.reply_text(texto_tutorial, parse_mode="HTML")
+        await update.message.reply_text(texto_tutorial, parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
         return
 
     elif texto_recebido == "🔑 Senhas de App":
@@ -1655,7 +1658,8 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
 
         await update.message.reply_text(
             "✅ <b>Seu relato e print foram enviados com sucesso ao nosso suporte!</b>\n\nMuito obrigado pelo aviso. Vamos analisar e corrigir o mais rápido possível.",
-            parse_mode="HTML"
+            parse_mode="HTML",
+            reply_markup=obter_teclado_usuario(user_id)
         )
         return
 
@@ -1670,12 +1674,13 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
     if not eh_admin and (not dados_cliente or not dados_cliente.get("emails_permitidos")) and not dados_cliente.get("permitir_sensivel"):
         await update.message.reply_text(
             f"🔒 <b>Acesso Não Liberado!</b>\n\nSeu ID de Usuário: <code>{user_id}</code>\n\nEncaminhe ao Suporte/Revendedor para liberação.",
-            parse_mode="HTML"
+            parse_mode="HTML",
+            reply_markup=obter_teclado_usuario(user_id)
         )
         return
 
     if not re.match(r"^[\w\.\+-]+@[\w\.-]+\.\w+$", email_original):
-        await update.message.reply_text("⚠️ Por favor, digite um <b>endereço de e-mail válido</b>.", parse_mode="HTML")
+        await update.message.reply_text("⚠️ Por favor, digite um <b>endereço de e-mail válido</b>.", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
         return
 
     pode_acessar_sensivel = eh_admin or dados_cliente.get("permitir_sensivel", False)
@@ -1703,12 +1708,14 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
             if email_expirado:
                 await update.message.reply_text(
                     f"🛑 <b>Acesso Expirado!</b>\n\nA autorização para o e-mail <code>{email_original}</code> já venceu. Entre em contato com seu revendedor.",
-                    parse_mode="HTML"
+                    parse_mode="HTML",
+                    reply_markup=obter_teclado_usuario(user_id)
                 )
             else:
                 await update.message.reply_text(
                     f"❌ Você não tem autorização para acessar o e-mail <code>{email_original}</code>.",
-                    parse_mode="HTML"
+                    parse_mode="HTML",
+                    reply_markup=obter_teclado_usuario(user_id)
                 )
             return
 
@@ -1729,13 +1736,14 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
     if not conta_encontrada:
         await update.message.reply_text(
             f"❌ A conta <code>{email_original}</code> não possui credenciais salvas no banco de dados.",
-            parse_mode="HTML"
+            parse_mode="HTML",
+            reply_markup=obter_teclado_usuario(user_id)
         )
         return
 
     email_login = conta_encontrada.get("email_login", email_base)
 
-    msg_carregando = await update.message.reply_text(f"⏳ Buscando e-mail recente para <code>{email_original}</code>...", parse_mode="HTML")
+    msg_carregando = await update.message.reply_text(f"⏳ Buscando e-mail recente para <code>{email_original}</code>...", parse_mode="HTML", reply_markup=obter_teclado_usuario(user_id))
 
     loop = asyncio.get_running_loop()
     try:
