@@ -1405,17 +1405,23 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
         logging.error(f"Erro ao editar mensagem: {e}")
 
 # ==========================================
-# EXECUÇÃO DO BOT
+# INICIALIZAÇÃO E EXECUÇÃO DO BOT
 # ==========================================
+async def post_init(application):
+    """Inicializa as tarefas em segundo plano de forma 100% segura e assíncrona."""
+    asyncio.create_task(verificar_alertas_vencimento(application))
+
 def main():
     Thread(target=run_flask, daemon=True).start()
 
     while True:
         try:
-            app = ApplicationBuilder().token(TOKEN_TELEGRAM).build()
-
-            # Inicia o verificador em segundo plano para alertas de vencimento
-            asyncio.get_event_loop().create_task(verificar_alertas_vencimento(app))
+            app = (
+                ApplicationBuilder()
+                .token(TOKEN_TELEGRAM)
+                .post_init(post_init)
+                .build()
+            )
 
             # Comandos Públicos
             app.add_handler(CommandHandler("start", start))
