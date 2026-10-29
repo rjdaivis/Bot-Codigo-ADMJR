@@ -53,11 +53,8 @@ if SUPABASE_URL and SUPABASE_KEY:
 CLIENTES_FIXOS_PADRAO = {
     str(ADMIN_ID): {
         "emails_permitidos": {"*": "2030-12-31"},
-        "permitir_sensivel": True
-    },
-    "6035184245": {
-        "emails_permitidos": {"*": "2027-01-16"},
-        "permitir_sensivel": True
+        "permitir_sensivel": True,
+        "criado_por": str(ADMIN_ID)
     }
 }
 
@@ -104,7 +101,6 @@ def extrair_anchors_html(corpo_html: str):
 # FUNÇÕES AUXILIARES DE TRATAMENTO DE DATAS E TEXTO
 # ==========================================
 def converter_para_date(data_str: str):
-    """Converte qualquer string de data (ISO, YYYY-MM-DD, DD-MM-YYYY) para um objeto date."""
     if not data_str:
         return None
     data_limpa = str(data_str).split("T")[0].strip()
@@ -117,7 +113,6 @@ def converter_para_date(data_str: str):
     return None
 
 def formatar_data_exibicao_br(data_str: str) -> str:
-    """Converte a data para o formato visual DD-MM-AAAA."""
     dt_obj = converter_para_date(data_str)
     if dt_obj:
         return dt_obj.strftime("%d-%m-%Y")
@@ -130,15 +125,192 @@ app_flask = Flask('')
 
 @app_flask.route('/')
 def home():
-    return "Bot de Códigos Online"
+    return "Bot de Códigos Multi-Revendas Online"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app_flask.run(host='0.0.0.0', port=port)
 
 # ==========================================
-# BANCO DE DADOS E PERSISTÊNCIA
+# BANCO DE DADOS E PERSISTÊNCIA (CONTAS, REVENDAS, CLIENTES, CONFIG)
 # ==========================================
+def carregar_json(caminho: str) -> dict:
+    if caminho == "clientes.json":
+        return carregar_clientes_db()
+    elif caminho == "contas.json":
+        return carregar_contas_db()
+    elif caminho == "revendedores.json":
+        return carregar_revendedores_db()
+    elif caminho == "config.json":
+        return carregar_config_db()
+
+    dados = {}
+    try:
+        if os.path.exists(caminho):
+            with open(caminho, "r", encoding="utf-8") as f:
+                dados = json.load(f)
+    except Exception as e:
+        logging.error(f"Erro ao carregar {caminho}: {e}")
+    return dados
+
+def salvar_json(caminho: str, dados: dict):
+    if caminho == "clientes.json":
+        salvar_clientes_db(dados)
+        return
+    elif caminho == "contas.json":
+        salvar_contas_db(dados)
+        return
+    elif caminho == "revendedores.json":
+        salvar_revendedores_db(dados)
+        return
+    elif caminho == "config.json":
+        salvar_config_db(dados)
+        return
+
+    try:
+        caminho_tmp = f"{caminho}.tmp"
+        with open(caminho_tmp, "w", encoding="utf-8") as f:
+            json.dump(dados, f, indent=2, ensure_ascii=False)
+        os.replace(caminho_tmp, caminho)
+    except Exception as e:
+        logging.error(f"Erro ao salvar {caminho}: {e}")
+
+# --- CONFIGURAÇÕES GERAIS ---
+def carregar_config_db() -> dict:
+    padrao = {"notificar_clientes": True}
+    if supabase:
+        try:
+            res = supabase.table("config_bot").select("*").execute()
+            if res.data:
+                for row in res.data:
+                    padrao[row.get("chave")] = row.get("valor")
+                return padrao
+        except Exception:
+            pass
+    if os.path.exists("config.json"):
+        try:
+            with open("config.json", "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return padrao
+
+def salvar_config_db(dados: dict):
+    try:
+        with open("config.json.tmp", "w", encoding="utf-8") as f:
+            json.dump(dados, f, indent=2, ensure_ascii=False)
+        os.replace("config.json.tmp", "config.json")
+    except Exception:
+        pass
+
+    if supabase:
+        try:
+            for k, v in dados.items():
+                supabase.table("config_bot").upsert({"chave": k, "valor": v}).execute()
+        except Exception:
+            pass
+
+# --- GERENCIAMENTO DE REVENDEDORES ---
+def carregar_revendedores_db() -> dict:
+    dados = {}
+    if supabase:
+        try:
+            res = supabase.table("revendedores_bot").select("*").execute()
+            if res.data:
+                for row in res.data:
+                    t_id = str(row.get("telegram_id")).strip()
+                    dados[t_id] = {
+                        "cadastrado_em": row.get("cadastrado_em", ""),
+                        "expira_em": row.get("expira_em", "2030-12-31"),
+                        "cadastrado_por": str(row.get("cadastrado_por", ADMIN_ID)),
+                        "alerta_expiracao_enviado": bool(row.get("alerta_expiracao_enviado", False))
+                    }
+        except Exception as e:
+            logging.error(f"Erro ao carregar revendedores do Supabase: {e}")
+
+    if not dados and os.path.exists("revendedores.json"):
+        try:
+            with open("revendedores.json", "r", encoding="utf-8") as f:
+                dados = json.load(f)
+        except Exception as e:
+            logging.error(f"Erro ao ler revendedores.json local: {e}")
+
+    return dados
+
+def salvar_revendedores_db(dados: dict):
+    try:
+        with open("revendedores.json.tmp", "w", encoding="utf-8") as f:
+            json.dump(dados, f, indent=2, ensure_ascii=False)
+        os.replace("revendedores.json.tmp", "revendedores.json")
+    except Exception as e:
+        logging.error(f"Erro ao salvar revendedores.json local: {e}")
+
+    if supabase:
+        try:
+            for t_id, info in dados.items():
+                payload = {
+                    "telegram_id": str(t_id).strip(),
+                    "cadastrado_em": info.get("cadastrado_em", datetime.now().strftime("%Y-%m-%d")),
+                    "expira_em": info.get("expira_em", "2030-12-31"),
+                    "cadastrado_por": str(info.get("cadastrado_por", ADMIN_ID)),
+                    "alerta_expiracao_enviado": bool(info.get("alerta_expiracao_enviado", False))
+                }
+                supabase.table("revendedores_bot").upsert(payload).execute()
+        except Exception as e:
+            logging.error(f"Erro ao salvar revendedores no Supabase: {e}")
+
+# --- GERENCIAMENTO DE CONTAS DE STREAMING ---
+def carregar_contas_db() -> dict:
+    dados = {}
+    if supabase:
+        try:
+            res = supabase.table("contas_bot").select("*").execute()
+            if res.data:
+                for row in res.data:
+                    email_c = str(row.get("email")).strip().lower()
+                    dados[email_c] = {
+                        "senha": row.get("senha"),
+                        "host_imap": row.get("host_imap", "imap.gmail.com"),
+                        "porta": row.get("porta", 993),
+                        "email_login": row.get("email_login", email_c),
+                        "dono_id": str(row.get("dono_id", ADMIN_ID))
+                    }
+        except Exception as e:
+            logging.error(f"Erro ao carregar contas do Supabase: {e}")
+
+    if not dados and os.path.exists("contas.json"):
+        try:
+            with open("contas.json", "r", encoding="utf-8") as f:
+                dados = json.load(f)
+        except Exception as e:
+            logging.error(f"Erro ao ler contas.json local: {e}")
+
+    return dados
+
+def salvar_contas_db(dados: dict):
+    try:
+        with open("contas.json.tmp", "w", encoding="utf-8") as f:
+            json.dump(dados, f, indent=2, ensure_ascii=False)
+        os.replace("contas.json.tmp", "contas.json")
+    except Exception as e:
+        logging.error(f"Erro ao salvar contas.json local: {e}")
+
+    if supabase:
+        try:
+            for email_c, info in dados.items():
+                payload = {
+                    "email": email_c.strip().lower(),
+                    "senha": info.get("senha"),
+                    "host_imap": info.get("host_imap", "imap.gmail.com"),
+                    "porta": info.get("porta", 993),
+                    "email_login": info.get("email_login", email_c),
+                    "dono_id": str(info.get("dono_id", ADMIN_ID))
+                }
+                supabase.table("contas_bot").upsert(payload).execute()
+        except Exception as e:
+            logging.error(f"Erro ao salvar contas no Supabase: {e}")
+
+# --- GERENCIAMENTO DE CLIENTES ---
 def carregar_clientes_db() -> dict:
     dados = {}
     if supabase:
@@ -149,9 +321,13 @@ def carregar_clientes_db() -> dict:
                     t_id = str(row.get("telegram_id")).strip()
                     emails = row.get("emails_permitidos") or {}
                     permitir = bool(row.get("permitir_sensivel", False))
+                    criado = str(row.get("criado_por", ADMIN_ID))
+                    alertas = row.get("alertas_enviados") or {}
                     dados[t_id] = {
                         "emails_permitidos": emails,
-                        "permitir_sensivel": permitir
+                        "permitir_sensivel": permitir,
+                        "criado_por": criado,
+                        "alertas_enviados": alertas
                     }
         except Exception as e:
             logging.error(f"Erro ao carregar clientes do Supabase: {e}")
@@ -167,17 +343,18 @@ def carregar_clientes_db() -> dict:
         if id_fixo not in dados:
             dados[id_fixo] = {
                 "emails_permitidos": dict(info_fixa.get("emails_permitidos", {})),
-                "permitir_sensivel": info_fixa.get("permitir_sensivel", True)
+                "permitir_sensivel": info_fixa.get("permitir_sensivel", True),
+                "criado_por": info_fixa.get("criado_por", str(ADMIN_ID)),
+                "alertas_enviados": {}
             }
 
     return dados
 
 def salvar_clientes_db(dados: dict):
     try:
-        caminho_tmp = "clientes.json.tmp"
-        with open(caminho_tmp, "w", encoding="utf-8") as f:
+        with open("clientes.json.tmp", "w", encoding="utf-8") as f:
             json.dump(dados, f, indent=2, ensure_ascii=False)
-        os.replace(caminho_tmp, "clientes.json")
+        os.replace("clientes.json.tmp", "clientes.json")
     except Exception as e:
         logging.error(f"Erro ao salvar clientes.json local: {e}")
 
@@ -188,37 +365,27 @@ def salvar_clientes_db(dados: dict):
                     "telegram_id": str(telegram_id).strip(),
                     "emails_permitidos": info.get("emails_permitidos", {}),
                     "permitir_sensivel": bool(info.get("permitir_sensivel", False)),
+                    "criado_por": str(info.get("criado_por", ADMIN_ID)),
+                    "alertas_enviados": info.get("alertas_enviados", {}),
                     "updated_at": datetime.now(timezone.utc).isoformat()
                 }
                 supabase.table("clientes_bot").upsert(payload).execute()
         except Exception as e:
-            logging.error(f"Erro ao salvar no Supabase: {e}")
+            logging.error(f"Erro ao salvar clientes no Supabase: {e}")
 
-def carregar_json(caminho: str) -> dict:
-    if caminho == "clientes.json":
-        return carregar_clientes_db()
+def eh_admin_master(user_id: str) -> bool:
+    return str(user_id).strip() == str(ADMIN_ID).strip()
 
-    dados = {}
-    try:
-        if os.path.exists(caminho):
-            with open(caminho, "r", encoding="utf-8") as f:
-                dados = json.load(f)
-    except Exception as e:
-        logging.error(f"Erro ao carregar {caminho}: {e}")
-    return dados
-
-def salvar_json(caminho: str, dados: dict):
-    if caminho == "clientes.json":
-        salvar_clientes_db(dados)
-        return
-
-    try:
-        caminho_tmp = f"{caminho}.tmp"
-        with open(caminho_tmp, "w", encoding="utf-8") as f:
-            json.dump(dados, f, indent=2, ensure_ascii=False)
-        os.replace(caminho_tmp, caminho)
-    except Exception as e:
-        logging.error(f"Erro ao salvar {caminho}: {e}")
+def eh_revendedor(user_id: str) -> bool:
+    user_id_str = str(user_id).strip()
+    if eh_admin_master(user_id_str):
+        return True
+    revendedores = carregar_json("revendedores.json")
+    if user_id_str in revendedores:
+        exp_date = converter_para_date(revendedores[user_id_str].get("expira_em"))
+        if exp_date and exp_date >= datetime.now().date():
+            return True
+    return False
 
 # ==========================================
 # MOTOR DE TRATAMENTO E EXTRAÇÃO IMAP
@@ -258,7 +425,6 @@ def tratar_quopri_e_html(payload_bytes: bytes, charset: str = 'utf-8') -> str:
         texto = payload_bytes.decode(charset or 'utf-8', errors='ignore')
     except Exception:
         texto = payload_bytes.decode('utf-8', errors='ignore')
-
     return html.unescape(texto)
 
 def extrair_apenas_texto_visivel(html_str: str) -> str:
@@ -277,17 +443,12 @@ def limpar_url_link(link: str) -> str:
     return link_limpo.strip()
 
 def extrair_link_acao_netflix(corpo_html: str):
-    """
-    Procura links de botões de ação na Netflix (Residência, Viagem, Receber Código, Redefinição).
-    Retorna (link, tipo) ou (None, None).
-    """
     if not corpo_html:
         return None, None
 
     bloqueadas = ["unsubscribe", "help.netflix.com", "privacy", "terms", "facebook", "twitter", "instagram"]
     anchors = extrair_anchors_html(corpo_html)
 
-    # 1. Pelo texto do BOTÃO (Anchor text)
     for href, text in anchors:
         l_limpo = limpar_url_link(href)
         l_lower = l_limpo.lower()
@@ -300,7 +461,6 @@ def extrair_link_acao_netflix(corpo_html: str):
             if any(p in txt_lower for p in ["redefinir senha", "redefinir sua senha", "alterar senha", "reset password"]):
                 return l_limpo, "redefinicao"
 
-    # 2. Pela estrutura da URL
     for href, text in anchors:
         l_limpo = limpar_url_link(href)
         l_lower = l_limpo.lower()
@@ -328,7 +488,6 @@ def extrair_link_hbomax_html(corpo_html: str) -> str:
         if ("hbomax.com" in link_lower or "max.com" in link_lower) and any(p in link_lower for p in ["reset", "token", "password", "auth", "credential"]):
             if not any(x in link_lower for x in ["unsubscribe", "help", "privacy", "terms"]):
                 return limpar_url_link(href)
-
     return ""
 
 def extrair_link_redefinicao_html(corpo_html: str) -> str:
@@ -340,11 +499,6 @@ def extrair_link_redefinicao_html(corpo_html: str) -> str:
         if any(p in link_lower for p in ["recuperar", "redefinir", "reset", "password", "alterar", "senha", "token", "confirm"]):
             if not any(x in link_lower for x in ["unsubscribe", "help", "privacy", "terms", "facebook", "twitter"]):
                 return limpar_url_link(href)
-
-    for href, text in anchors:
-        link_lower = href.lower()
-        if not any(x in link_lower for x in ["unsubscribe", "help", "privacy", "terms", "facebook", "twitter"]):
-            return limpar_url_link(href)
     return ""
 
 def extrair_url_pura_href(corpo_html: str, termo_busca: str = "http") -> str:
@@ -439,7 +593,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             eh_netflix = ("netflix" in remetente_lower or "netflix" in assunto_lower or "netflix" in corpo_html.lower())
             eh_disney = ("disney" in remetente_lower or "disney" in assunto_lower or "disneyplus" in corpo_html.lower())
 
-            # 1. DISNEY+: CÓDIGOS DE 6 DÍGITOS
             if eh_disney:
                 codigos = re.findall(r'\b\d{6}\b', corpo_texto_puro)
                 if not codigos:
@@ -450,9 +603,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     mail.logout()
                     return f"✅ <b>Código Disney+ Encontrado!</b>\n\n🔑 Seu código é: <code>{codigo_valido}</code>\n\n⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
 
-            # 2. NETFLIX: TRATAMENTO COMPLETO E FLEXÍVEL
             if eh_netflix:
-                # PASSO 1: VERIFICAR SE EXISTE UM BOTÃO/LINK DE AÇÃO NO E-MAIL (Residência, Viagem, Receber Código, Redefinição)
                 link_acao, tipo_acao = extrair_link_acao_netflix(corpo_html)
 
                 if link_acao:
@@ -489,7 +640,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                             f"⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
                         )
 
-                # PASSO 2: SE NÃO HOUVER BOTÃO DE AÇÃO, PROCURAR CÓDIGO NUMÉRICO IMPRESSO NO TEXTO
                 texto_limpo = re.sub(r'\b\d{1,2}:\d{2}(?::\d{2})?\b', '', corpo_texto_puro)
                 texto_limpo = re.sub(r'\b\d{1,2}\s+de\s+[a-zç]+\b', '', texto_limpo, flags=re.IGNORECASE)
 
@@ -501,7 +651,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     mail.logout()
                     return f"✅ <b>Código de Acesso Netflix Encontrado!</b>\n\n🔑 Seu código é: <code>{codigo_valido}</code>\n\n⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
 
-                # PASSO 3: FALLBACK DE LINK GENÉRICO
                 link_fallback = extrair_url_pura_href(corpo_html, "netflix.com")
                 if link_fallback and not any(x in link_fallback for x in ["unsubscribe", "help", "privacy", "terms"]):
                     mail.close()
@@ -512,7 +661,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         f"⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
                     )
 
-            # 3. CÓDIGO NUMÉRICO DE ENTRADA / ACESSO GERAL
             eh_email_codigo = any(p in assunto_lower for p in ["código", "codigo", "temporário", "temporario", "autorização", "autorizacao", "verificação", "verificacao"])
             if eh_email_codigo:
                 texto_limpo = re.sub(r'\b\d{1,2}:\d{2}(?::\d{2})?\b', '', corpo_texto_puro)
@@ -523,7 +671,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     mail.logout()
                     return f"✅ <b>Código Encontrado!</b>\n\n🔑 Seu código é: <code>{codigo_valido}</code>\n\n⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
 
-            # 4. SEGURANÇA VIP OUTROS STREAMINGS (REDEFINIÇÃO DE SENHA)
             eh_redefinicao = (
                 any(p in assunto_lower for p in ["redefinir", "recuperar", "alteração de senha", "alterar senha", "reset password", "restabelecer senha"])
                 or ("recuperar" in assunto_lower and "senha" in assunto_lower)
@@ -548,7 +695,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         f"⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
                     )
 
-            # 5. CASO GENÉRICO DE FALLBACK DE CÓDIGO
             texto_limpo = re.sub(r'\b\d{1,2}:\d{2}(?::\d{2})?\b', '', corpo_texto_puro)
             codigos_encontrados = re.findall(r'\b\d{4,6}\b', texto_limpo)
             codigo_valido = next((c for c in codigos_encontrados if not c.startswith("0800") and c not in ["2024", "2025", "2026", "2027"]), None)
@@ -583,14 +729,93 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             pass
 
 # ==========================================
-# COMANDOS E RESPOSTAS DO BOT TELEGRAM
+# MOTOR DE ALERTAS E NOTIFICAÇÕES AUTOMÁTICAS
+# ==========================================
+async def verificar_alertas_vencimento(app):
+    """Verifica e notifica revendedores e clientes 1 dia antes do vencimento do acesso."""
+    while True:
+        try:
+            await asyncio.sleep(3600)  # Executa a cada 1 hora
+            hoje = datetime.now().date()
+            amanha = hoje + timedelta(days=1)
+
+            # 1. ALERTAR REVENDEDORES (1 dia antes do acesso expirar)
+            revendedores = carregar_json("revendedores.json")
+            alterado_rev = False
+            for r_id, info in revendedores.items():
+                exp_date = converter_para_date(info.get("expira_em"))
+                alerta_enviado = info.get("alerta_expiracao_enviado", False)
+
+                if exp_date == amanha and not alerta_enviado:
+                    try:
+                        await app.bot.send_message(
+                            chat_id=int(r_id),
+                            text=(
+                                f"⚠️ <b>AVISO DE VENCIMENTO DE REVENDA!</b>\n\n"
+                                f"Sua assinatura como Revendedor expira <b>amanhã ({amanha.strftime('%d-%m-%Y')})</b>.\n\n"
+                                f"📞 Entre em contato com o <b>Administrador Master</b> para efetuar a renovação e manter o acesso dos seus clientes ativos!"
+                            ),
+                            parse_mode="HTML"
+                        )
+                        revendedores[r_id]["alerta_expiracao_enviado"] = True
+                        alterado_rev = True
+                    except Exception as e:
+                        logging.error(f"Erro ao notificar revendedor {r_id}: {e}")
+
+            if alterado_rev:
+                salvar_json("revendedores.json", revendedores)
+
+            # 2. ALERTAR CLIENTES (1 dia antes de perder o e-mail - OPCIONAL)
+            config = carregar_json("config.json")
+            if config.get("notificar_clientes", True):
+                clientes = carregar_json("clientes.json")
+                alterado_cli = False
+
+                for c_id, info in clientes.items():
+                    emails = info.get("emails_permitidos", {})
+                    alertas_enviados = info.get("alertas_enviados", {})
+
+                    for email_c, data_exp in emails.items():
+                        if email_c == "*":
+                            continue
+                        exp_date = converter_para_date(data_exp)
+
+                        if exp_date == amanha and not alertas_enviados.get(email_c, False):
+                            try:
+                                await app.bot.send_message(
+                                    chat_id=int(c_id),
+                                    text=(
+                                        f"⏳ <b>AVISO DE VENCIMENTO DE ACESSO!</b>\n\n"
+                                        f"O seu acesso ao e-mail <code>{email_c}</code> expira <b>amanhã ({amanha.strftime('%d-%m-%Y')})</b>.\n\n"
+                                        f"🔄 Caso queira renovar e continuar usando sem interrupções, entre em contato com o suporte/revendedor agora mesmo!"
+                                    ),
+                                    parse_mode="HTML"
+                                )
+                                if "alertas_enviados" not in clientes[c_id]:
+                                    clientes[c_id]["alertas_enviados"] = {}
+                                clientes[c_id]["alertas_enviados"][email_c] = True
+                                alterado_cli = True
+                            except Exception as e:
+                                logging.error(f"Erro ao notificar cliente {c_id}: {e}")
+
+                if alterado_cli:
+                    salvar_json("clientes.json", clientes)
+
+        except Exception as err:
+            logging.error(f"Erro na rotina de alertas de vencimento: {err}")
+
+# ==========================================
+# COMANDOS E PAINEL / MENU DO BOT
 # ==========================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id).strip()
-    
+
     keyboard = [
         [InlineKeyboardButton("📖 Como Usar / Tutorial", callback_data="tutorial")]
     ]
+    if eh_revendedor(user_id):
+        keyboard.append([InlineKeyboardButton("⚙️ Painel de Controle / Menu", callback_data="menu_admin")])
+
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_text(
@@ -601,6 +826,50 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML",
         reply_markup=reply_markup
     )
+
+async def menu_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id).strip()
+    if not eh_revendedor(user_id):
+        await update.message.reply_text("⛔ Você não possui acesso ao painel de administração.", parse_mode="HTML")
+        return
+
+    is_master = eh_admin_master(user_id)
+    config = carregar_json("config.json")
+    status_notif = "LIGADO 🔔" if config.get("notificar_clientes", True) else "DESLIGADO 🔕"
+
+    if is_master:
+        texto_menu = (
+            "👑 <b>PAINEL MASTER ADM</b>\n\n"
+            "<b>Gerenciamento de Revendedores:</b>\n"
+            "• <code>/addrevenda ID_TELEGRAM DIAS_OU_DATA</code> - Adicionar Revendedor\n"
+            "• <code>/delrevenda ID_TELEGRAM</code> - Remover Revendedor\n"
+            "• <code>/listarrevendas</code> - Ver Revendedores e Métricas\n\n"
+            "<b>Gerenciamento de Contas e Clientes:</b>\n"
+            "• <code>/addconta EMAIL SENHA_APP</code> - Cadastrar E-mail\n"
+            "• <code>/delconta EMAIL</code> - Remover E-mail\n"
+            "• <code>/listarcontas</code> - Ver E-mails no Banco\n"
+            "• <code>/autorizar ID_CLIENTE EMAIL DIAS_OU_DATA</code> - Liberar Cliente\n"
+            "• <code>/listar</code> - Listar Clientes e Validades\n"
+            "• <code>/editar ID_CLIENTE EMAIL DATA</code> - Alterar Data de Vencimento\n"
+            "• <code>/remover ID_CLIENTE EMAIL</code> - Cancelar Acesso\n\n"
+            f"<b>Configurações Gerais:</b>\n"
+            f"• <code>/notificacoes sim/nao</code> - Alertas de Clientes (Atual: <b>{status_notif}</b>)"
+        )
+    else:
+        texto_menu = (
+            "💼 <b>PAINEL DO REVENDEDOR</b>\n\n"
+            "<b>Gerenciamento de Suas Contas:</b>\n"
+            "• <code>/addconta EMAIL SENHA_APP</code> - Cadastrar seu E-mail\n"
+            "• <code>/delconta EMAIL</code> - Remover seu E-mail\n"
+            "• <code>/listarcontas</code> - Ver seus E-mails no Banco\n\n"
+            "<b>Gerenciamento dos Seus Clientes:</b>\n"
+            "• <code>/autorizar ID_CLIENTE EMAIL DIAS_OU_DATA</code> - Liberar Cliente\n"
+            "• <code>/listar</code> - Listar seus Clientes e Validades\n"
+            "• <code>/editar ID_CLIENTE EMAIL DATA</code> - Alterar Data do Cliente\n"
+            "• <code>/remover ID_CLIENTE EMAIL</code> - Remover Cliente"
+        )
+
+    await update.message.reply_text(texto_menu, parse_mode="HTML")
 
 async def tutorial_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -615,9 +884,231 @@ async def tutorial_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "📌 <i>Atenção: Digite a grafia exata do e-mail cadastrado (com os mesmos pontos e letras).</i>"
         )
         await query.message.reply_text(texto_tutorial, parse_mode="HTML")
+    elif query.data == "menu_admin":
+        await menu_comando(update, context)
 
+# ==========================================
+# GERENCIAMENTO DE REVENDEDORES (MASTER ADM)
+# ==========================================
+async def add_revenda_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id).strip()
+    if not eh_admin_master(user_id):
+        return
+
+    if len(context.args) < 2:
+        await update.message.reply_text(
+            "⚠️ <b>Uso correto:</b> <code>/addrevenda ID_TELEGRAM DIAS_OU_DATA</code>\n\n"
+            "Exemplos:\n"
+            "• <code>/addrevenda 123456789 30</code>\n"
+            "• <code>/addrevenda 123456789 28-11-2026</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    novo_id_revenda = str(context.args[0]).strip()
+    arg_tempo = str(context.args[1]).strip()
+
+    hoje = datetime.now().date()
+    if arg_tempo.isdigit():
+        dias = int(arg_tempo)
+        dt_expira = hoje + timedelta(days=dias)
+    else:
+        exp_date = converter_para_date(arg_tempo)
+        if not exp_date:
+            await update.message.reply_text("⚠️ Data inválida! Use dias ou formato <b>DD-MM-AAAA</b>.", parse_mode="HTML")
+            return
+        dt_expira = exp_date
+
+    data_exp_str = dt_expira.strftime("%Y-%m-%d")
+    data_exibicao = dt_expira.strftime("%d-%m-%Y")
+
+    revendedores = carregar_json("revendedores.json")
+    revendedores[novo_id_revenda] = {
+        "cadastrado_em": hoje.strftime("%Y-%m-%d"),
+        "expira_em": data_exp_str,
+        "cadastrado_por": user_id,
+        "alerta_expiracao_enviado": False
+    }
+    salvar_json("revendedores.json", revendedores)
+
+    await update.message.reply_text(
+        f"👑 <b>Revendedor Cadastrado com Sucesso!</b>\n\n"
+        f"👤 <b>ID Revenda:</b> <code>{novo_id_revenda}</code>\n"
+        f"📅 <b>Válido até:</b> {data_exibicao}\n\n"
+        f"Agora este usuário pode cadastrar e-mails (<code>/addconta</code>) e gerenciar clientes (<code>/autorizar</code>).",
+        parse_mode="HTML"
+    )
+
+async def del_revenda_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id).strip()
+    if not eh_admin_master(user_id):
+        return
+
+    if not context.args:
+        await update.message.reply_text("⚠️ <b>Uso correto:</b> <code>/delrevenda ID_TELEGRAM</code>", parse_mode="HTML")
+        return
+
+    target_id = str(context.args[0]).strip()
+    revendedores = carregar_json("revendedores.json")
+
+    if target_id in revendedores:
+        del revendedores[target_id]
+        salvar_json("revendedores.json", revendedores)
+        await update.message.reply_text(f"🗑️ Revendedor <code>{target_id}</code> removido!", parse_mode="HTML")
+    else:
+        await update.message.reply_text(f"❌ Revendedor <code>{target_id}</code> não encontrado.", parse_mode="HTML")
+
+async def listar_revendas_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id).strip()
+    if not eh_admin_master(user_id):
+        return
+
+    revendedores = carregar_json("revendedores.json")
+    if not revendedores:
+        await update.message.reply_text("📋 <b>Nenhum revendedor cadastrado.</b>", parse_mode="HTML")
+        return
+
+    contas = carregar_json("contas.json")
+    clientes = carregar_json("clientes.json")
+    hoje = datetime.now().date()
+
+    msg = "👑 <b>Lista de Revendedores Cadastrados:</b>\n\n"
+    for r_id, info in revendedores.items():
+        exp_date = converter_para_date(info.get("expira_em"))
+        if exp_date:
+            dias_restantes = (exp_date - hoje).days
+            status_txt = f"🛑 <i>Expirado</i>" if dias_restantes < 0 else f"{exp_date.strftime('%d-%m-%Y')} ({dias_restantes}d)"
+        else:
+            status_txt = "Sem limite"
+
+        total_contas = sum(1 for c in contas.values() if str(c.get("dono_id")) == r_id)
+        total_clientes = sum(1 for cl in clientes.values() if str(cl.get("criado_por")) == r_id)
+        msg += f"👤 <b>ID:</b> <code>{r_id}</code>\n ├ 📅 Validade: {status_txt}\n ├ 📧 Contas no Banco: <b>{total_contas}</b>\n └ 👥 Clientes Ativos: <b>{total_clientes}</b>\n\n"
+
+    await update.message.reply_text(msg, parse_mode="HTML")
+
+async def toggle_notificacoes_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id).strip()
+    if not eh_admin_master(user_id):
+        return
+
+    if not context.args or context.args[0].lower() not in ["sim", "nao", "s", "n", "true", "false", "on", "off"]:
+        await update.message.reply_text("⚠️ <b>Uso correto:</b> <code>/notificacoes sim</code> ou <code>/notificacoes nao</code>", parse_mode="HTML")
+        return
+
+    opcao = context.args[0].lower() in ["sim", "s", "true", "on"]
+    config = carregar_json("config.json")
+    config["notificar_clientes"] = opcao
+    salvar_json("config.json", config)
+
+    status_txt = "ATIVADAS 🔔 (O bot avisará os clientes 1 dia antes do vencimento)" if opcao else "DESATIVADAS 🔕"
+    await update.message.reply_text(f"⚙️ <b>Notificações de Clientes:</b> {status_txt}", parse_mode="HTML")
+
+# ==========================================
+# GERENCIAMENTO DE CONTAS DO BANCO (E-MAIL + SENHA DO APP)
+# ==========================================
+async def add_conta_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id).strip()
+    if not eh_revendedor(user_id):
+        return
+
+    if len(context.args) < 2:
+        await update.message.reply_text(
+            "⚠️ <b>Uso correto:</b> <code>/addconta email@gmail.com SENHA_DO_APP</code>\n\n"
+            "Exemplo: <code>/addconta cliente1@gmail.com abcd efgh ijkl mnop</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    email_conta = str(context.args[0]).strip().lower()
+    senha_conta = " ".join(context.args[1:]).strip()
+
+    if not re.match(r"^[\w\.\+-]+@[\w\.-]+\.\w+$", email_conta):
+        await update.message.reply_text("⚠️ Insira um e-mail válido.", parse_mode="HTML")
+        return
+
+    contas = carregar_json("contas.json")
+
+    if email_conta in contas and not eh_admin_master(user_id):
+        if str(contas[email_conta].get("dono_id")) != user_id:
+            await update.message.reply_text("⛔ Este e-mail pertence a outro revendedor!", parse_mode="HTML")
+            return
+
+    host_imap = "imap.gmail.com"
+    if "yahoo" in email_conta:
+        host_imap = "imap.mail.yahoo.com"
+    elif "outlook" in email_conta or "hotmail" in email_conta:
+        host_imap = "outlook.office365.com"
+
+    contas[email_conta] = {
+        "senha": senha_conta,
+        "host_imap": host_imap,
+        "porta": 993,
+        "email_login": email_conta,
+        "dono_id": user_id
+    }
+    salvar_json("contas.json", contas)
+
+    await update.message.reply_text(
+        f"✅ <b>Conta Cadastrada no Banco com Sucesso!</b>\n\n"
+        f"📧 <b>E-mail:</b> <code>{email_conta}</code>\n"
+        f"🔑 <b>Senha cadastrada:</b> OK\n"
+        f"👑 <b>Dono do Registro:</b> <code>{user_id}</code>\n\n"
+        f"Agora você pode liberar acesso para seus clientes com <code>/autorizar ID_CLIENTE {email_conta} DIAS</code>",
+        parse_mode="HTML"
+    )
+
+async def del_conta_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id).strip()
+    if not eh_revendedor(user_id):
+        return
+
+    if not context.args:
+        await update.message.reply_text("⚠️ <b>Uso correto:</b> <code>/delconta email@gmail.com</code>", parse_mode="HTML")
+        return
+
+    email_target = str(context.args[0]).strip().lower()
+    contas = carregar_json("contas.json")
+
+    if email_target in contas:
+        dono_id = str(contas[email_target].get("dono_id"))
+        if not eh_admin_master(user_id) and dono_id != user_id:
+            await update.message.reply_text("⛔ Você não tem permissão para remover esta conta.", parse_mode="HTML")
+            return
+
+        del contas[email_target]
+        salvar_json("contas.json", contas)
+        await update.message.reply_text(f"🗑️ Conta <code>{email_target}</code> removida do banco!", parse_mode="HTML")
+    else:
+        await update.message.reply_text(f"❌ Conta <code>{email_target}</code> não encontrada.", parse_mode="HTML")
+
+async def listar_contas_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id).strip()
+    if not eh_revendedor(user_id):
+        return
+
+    contas = carregar_json("contas.json")
+    is_master = eh_admin_master(user_id)
+
+    contas_filtradas = {e: c for e, c in contas.items() if is_master or str(c.get("dono_id")) == user_id}
+
+    if not contas_filtradas:
+        await update.message.reply_text("📋 <b>Você não possui nenhuma conta cadastrada no banco.</b>", parse_mode="HTML")
+        return
+
+    msg = "📋 <b>Contas de Streaming Cadastradas:</b>\n\n"
+    for email_c, info in contas_filtradas.items():
+        dono_str = f" | Dono: <code>{info.get('dono_id')}</code>" if is_master else ""
+        msg += f"📧 <code>{email_c}</code>{dono_str}\n"
+
+    await update.message.reply_text(msg, parse_mode="HTML")
+
+# ==========================================
+# GERENCIAMENTO DE CLIENTES
+# ==========================================
 async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if str(update.effective_user.id).strip() != str(ADMIN_ID).strip():
+    user_id = str(update.effective_user.id).strip()
+    if not eh_revendedor(user_id):
         return
 
     try:
@@ -625,9 +1116,19 @@ async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
         email_cliente_raw = context.args[1].strip().lower()
         arg_terceiro = str(context.args[2]).strip()
 
+        contas = carregar_json("contas.json")
+        if email_cliente_raw != "*" and not eh_admin_master(user_id):
+            if email_cliente_raw not in contas or str(contas[email_cliente_raw].get("dono_id")) != user_id:
+                await update.message.reply_text(
+                    f"⛔ <b>Acesso Negado!</b>\n\nO e-mail <code>{email_cliente_raw}</code> não está cadastrado no seu banco. Adicione-o primeiro com <code>/addconta</code>.",
+                    parse_mode="HTML"
+                )
+                return
+
         liberar_sensivel = False
         if len(context.args) > 3 and context.args[3].lower() in ["vip", "sensivel", "true", "todos", "sim"]:
-            liberar_sensivel = True
+            if eh_admin_master(user_id):
+                liberar_sensivel = True
 
         hoje = datetime.now().date()
 
@@ -637,10 +1138,7 @@ async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             exp_date = converter_para_date(arg_terceiro)
             if not exp_date:
-                await update.message.reply_text(
-                    "⚠️ <b>Validade inválida!</b> Use número de dias (ex: <code>30</code>) ou data (ex: <code>05-11-2026</code>).",
-                    parse_mode="HTML"
-                )
+                await update.message.reply_text("⚠️ <b>Validade inválida!</b> Use número de dias (ex: <code>30</code>) ou data (ex: <code>28-11-2026</code>).", parse_mode="HTML")
                 return
             dt_expira = exp_date
             dias = (dt_expira - hoje).days
@@ -653,7 +1151,9 @@ async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user_id_cliente not in clientes:
             clientes[user_id_cliente] = {
                 "emails_permitidos": {},
-                "permitir_sensivel": liberar_sensivel
+                "permitir_sensivel": liberar_sensivel,
+                "criado_por": user_id,
+                "alertas_enviados": {}
             }
         else:
             if liberar_sensivel:
@@ -664,30 +1164,28 @@ async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         clientes[user_id_cliente]["emails_permitidos"][email_cliente_raw] = data_validade_banco
 
+        if "alertas_enviados" in clientes[user_id_cliente]:
+            clientes[user_id_cliente]["alertas_enviados"][email_cliente_raw] = False
+
         salvar_json("clientes.json", clientes)
 
-        msg_vip = " (Acesso Total + VIP)" if clientes[user_id_cliente].get("permitir_sensivel") else ""
         await update.message.reply_text(
             f"✅ <b>Acesso Concedido com Sucesso!</b>\n\n"
             f"👤 <b>ID Cliente:</b> <code>{user_id_cliente}</code>\n"
             f"📧 <b>E-mail Liberado:</b> <code>{email_cliente_raw}</code>\n"
-            f"📅 <b>Válido até:</b> {data_validade_exibicao} ({dias} dias){msg_vip}\n\n"
-            f"⚠️ <b>Atenção:</b> Apenas a grafia exata (<code>{email_cliente_raw}</code>) terá acesso liberado.",
+            f"📅 <b>Válido até:</b> {data_validade_exibicao} ({dias} dias)\n",
             parse_mode="HTML"
         )
     except Exception as e:
         logging.error(f"Erro ao autorizar cliente: {e}")
         await update.message.reply_text(
-            "⚠️ <b>Uso correto:</b> <code>/autorizar ID_CLIENTE EMAIL DIAS_OU_DATA [vip]</code>\n\n"
-            "Exemplos:\n"
-            "• <code>/autorizar 7219528497 email@gmail.com 30</code>\n"
-            "• <code>/autorizar 7219528497 email@gmail.com 05-11-2026</code>",
+            "⚠️ <b>Uso correto:</b> <code>/autorizar ID_CLIENTE EMAIL DIAS_OU_DATA</code>\n\n"
+            "Exemplo: <code>/autorizar 7219528497 email@gmail.com 30</code>",
             parse_mode="HTML"
         )
 
 async def vip_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando /vip <telegram_id> sim/nao para liberar busca ilimitada de e-mails."""
-    if str(update.effective_user.id).strip() != str(ADMIN_ID).strip():
+    if not eh_admin_master(update.effective_user.id):
         return
 
     if len(context.args) < 2:
@@ -695,33 +1193,26 @@ async def vip_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     target_id = str(context.args[0]).strip()
-    opcao = str(context.args[1]).strip().lower()
-    status_vip = opcao in ["sim", "s", "true", "1", "vip", "on"]
+    status_vip = str(context.args[1]).strip().lower() in ["sim", "s", "true", "1", "vip", "on"]
 
     clientes = carregar_json("clientes.json")
     if target_id not in clientes:
-        clientes[target_id] = {"emails_permitidos": {}, "permitir_sensivel": status_vip}
+        clientes[target_id] = {"emails_permitidos": {}, "permitir_sensivel": status_vip, "criado_por": str(ADMIN_ID), "alertas_enviados": {}}
     else:
         clientes[target_id]["permitir_sensivel"] = status_vip
 
     salvar_json("clientes.json", clientes)
 
-    txt_status = "ATIVADO ⭐️\nEste Telegram ID agora possui **busca ilimitada** para qualquer e-mail digitado!" if status_vip else "DESATIVADO\nEste Telegram ID voltou a depender de e-mails específicos autorizados."
-    await update.message.reply_text(
-        f"👑 <b>Status VIP do ID <code>{target_id}</code>:</b> {txt_status}",
-        parse_mode="HTML"
-    )
+    txt_status = "ATIVADO ⭐️" if status_vip else "DESATIVADO"
+    await update.message.reply_text(f"👑 <b>Status VIP do ID <code>{target_id}</code>:</b> {txt_status}", parse_mode="HTML")
 
 async def editar_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando /editar <telegram_id> <email> <nova_data_DD-MM-AAAA ou sem_data>."""
-    if str(update.effective_user.id).strip() != str(ADMIN_ID).strip():
+    user_id = str(update.effective_user.id).strip()
+    if not eh_revendedor(user_id):
         return
 
     if len(context.args) < 3:
-        await update.message.reply_text(
-            "⚠️ <b>Uso correto:</b> <code>/editar ID_CLIENTE EMAIL DD-MM-AAAA</code> ou <code>/editar ID_CLIENTE EMAIL sem_data</code>",
-            parse_mode="HTML"
-        )
+        await update.message.reply_text("⚠️ <b>Uso correto:</b> <code>/editar ID_CLIENTE EMAIL DD-MM-AAAA</code>", parse_mode="HTML")
         return
 
     target_id = str(context.args[0]).strip()
@@ -730,10 +1221,15 @@ async def editar_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     clientes = carregar_json("clientes.json")
     if target_id not in clientes or target_email not in clientes[target_id].get("emails_permitidos", {}):
-        await update.message.reply_text(f"❌ O e-mail <code>{target_email}</code> não está cadastrado para o ID <code>{target_id}</code>.", parse_mode="HTML")
+        await update.message.reply_text(f"❌ E-mail <code>{target_email}</code> não encontrado para este cliente.", parse_mode="HTML")
         return
 
-    if nova_opcao in ["sem_data", "semdata", "none", "ilimitado", "0"]:
+    criado_por = str(clientes[target_id].get("criado_por", ADMIN_ID))
+    if not eh_admin_master(user_id) and criado_por != user_id:
+        await update.message.reply_text("⛔ Você não tem permissão para editar este cliente.", parse_mode="HTML")
+        return
+
+    if nova_opcao in ["sem_data", "semdata", "ilimitado"]:
         clientes[target_id]["emails_permitidos"][target_email] = "2030-12-31"
         data_exib = "Sem expiração (Ilimitado)"
     else:
@@ -741,19 +1237,18 @@ async def editar_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not exp_date:
             await update.message.reply_text("⚠️ Data inválida! Use o formato <b>DD-MM-AAAA</b>.", parse_mode="HTML")
             return
-        data_salvar = exp_date.strftime("%Y-%m-%d")
+        clientes[target_id]["emails_permitidos"][target_email] = exp_date.strftime("%Y-%m-%d")
         data_exib = exp_date.strftime("%d-%m-%Y")
-        clientes[target_id]["emails_permitidos"][target_email] = data_salvar
+
+    if "alertas_enviados" in clientes[target_id]:
+        clientes[target_id]["alertas_enviados"][target_email] = False
 
     salvar_json("clientes.json", clientes)
-    await update.message.reply_text(
-        f"✏️ <b>Data atualizada com sucesso!</b>\n\n👤 <b>ID:</b> <code>{target_id}</code>\n📧 <b>E-mail:</b> <code>{target_email}</code>\n📅 <b>Nova Validade:</b> {data_exib}",
-        parse_mode="HTML"
-    )
+    await update.message.reply_text(f"✏️ Data atualizada para {data_exib}!", parse_mode="HTML")
 
 async def remover_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando /remover <telegram_id> <email>."""
-    if str(update.effective_user.id).strip() != str(ADMIN_ID).strip():
+    user_id = str(update.effective_user.id).strip()
+    if not eh_revendedor(user_id):
         return
 
     if len(context.args) < 2:
@@ -765,86 +1260,50 @@ async def remover_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     clientes = carregar_json("clientes.json")
     if target_id in clientes and target_email in clientes[target_id].get("emails_permitidos", {}):
+        criado_por = str(clientes[target_id].get("criado_por", ADMIN_ID))
+        if not eh_admin_master(user_id) and criado_por != user_id:
+            await update.message.reply_text("⛔ Você não tem permissão para remover este cliente.", parse_mode="HTML")
+            return
+
         del clientes[target_id]["emails_permitidos"][target_email]
         salvar_json("clientes.json", clientes)
-        await update.message.reply_text(
-            f"🗑️ E-mail <code>{target_email}</code> <b>removido com sucesso</b> do ID <code>{target_id}</code>!",
-            parse_mode="HTML"
-        )
+        await update.message.reply_text(f"🗑️ E-mail <code>{target_email}</code> removido do ID <code>{target_id}</code>!", parse_mode="HTML")
     else:
-        await update.message.reply_text(
-            f"❌ O e-mail <code>{target_email}</code> não foi localizado no cadastro do ID <code>{target_id}</code>.",
-            parse_mode="HTML"
-        )
-
-async def limpar_nao_vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if str(update.effective_user.id).strip() != str(ADMIN_ID).strip():
-        return
-
-    clientes = carregar_json("clientes.json")
-    hoje = datetime.now().date()
-    emails_removidos = 0
-
-    for user_id, dados in list(clientes.items()):
-        emails = dados.get("emails_permitidos", {})
-        para_remover = []
-        for email_end, data_exp in emails.items():
-            if email_end != "*":
-                exp_date = converter_para_date(data_exp)
-                if exp_date and exp_date < hoje:
-                    para_remover.append(email_end)
-        for email_vencido in para_remover:
-            del dados["emails_permitidos"][email_vencido]
-            emails_removidos += 1
-
-    salvar_json("clientes.json", clientes)
-
-    await update.message.reply_text(
-        f"🧹 <b>Limpeza Inteligente Concluída!</b>\n\n"
-        f"Foram removidos <b>{emails_removidos}</b> e-mail(s) com data de validade vencida.\n\n"
-        f"Todos os acessos de clientes ainda válidos foram 100% preservados!",
-        parse_mode="HTML"
-    )
+        await update.message.reply_text(f"❌ O e-mail não foi localizado no cadastro do cliente.", parse_mode="HTML")
 
 async def listar_clientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if str(update.effective_user.id).strip() != str(ADMIN_ID).strip():
+    user_id = str(update.effective_user.id).strip()
+    if not eh_revendedor(user_id):
         return
 
     clientes = carregar_json("clientes.json")
-    if not clientes:
-        await update.message.reply_text("📋 <b>Nenhum cliente cadastrado no momento.</b>", parse_mode="HTML")
+    is_master = eh_admin_master(user_id)
+
+    lista_filtrada = {k: v for k, v in clientes.items() if is_master or str(v.get("criado_por")) == user_id}
+
+    if not lista_filtrada:
+        await update.message.reply_text("📋 <b>Nenhum cliente cadastrado por você.</b>", parse_mode="HTML")
         return
 
-    if context.args:
-        target_id = str(context.args[0]).strip()
-        if target_id not in clientes:
-            await update.message.reply_text(f"❌ Nenhum registro encontrado para o ID <code>{target_id}</code>.", parse_mode="HTML")
-            return
-        lista_filtrada = {target_id: clientes[target_id]}
-    else:
-        lista_filtrada = clientes
-
     hoje = datetime.now().date()
-    mensagem = "📋 <b>Lista de Clientes Liberados:</b>\n\n"
+    mensagem = "📋 <b>Sua Lista de Clientes Liberados:</b>\n\n"
 
     for id_cliente, dados in lista_filtrada.items():
         emails = dados.get("emails_permitidos", {})
-        vip = "Sim ⭐️" if dados.get("permitir_sensivel") else "Não"
-        mensagem += f"👤 <b>ID:</b> <code>{id_cliente}</code> | <b>VIP:</b> {vip}\n"
-        if not emails:
-            mensagem += " └ ⚠️ Nenhum e-mail liberado.\n"
-        else:
-            for email_end, data_exp in emails.items():
-                exp_date = converter_para_date(data_exp)
-                if exp_date:
-                    dias_restantes = (exp_date - hoje).days
-                    status_dias = "🛑 <i>Expirado</i>" if dias_restantes < 0 else f"⏳ <i>Faltam {dias_restantes} dia(s)</i>"
-                    data_exibicao = exp_date.strftime("%d-%m-%Y")
-                else:
-                    status_dias = "❓ Data inválida"
-                    data_exibicao = str(data_exp)
+        dono_tag = f" (Criado por: <code>{dados.get('criado_por')}</code>)" if is_master else ""
+        mensagem += f"👤 <b>ID:</b> <code>{id_cliente}</code>{dono_tag}\n"
 
-                mensagem += f" └ 📧 <code>{email_end}</code>\n 📅 Validade: {data_exibicao} ({status_dias})\n"
+        for email_end, data_exp in emails.items():
+            exp_date = converter_para_date(data_exp)
+            if exp_date:
+                dias_restantes = (exp_date - hoje).days
+                status_dias = "🛑 <i>Expirado</i>" if dias_restantes < 0 else f"⏳ <i>Faltam {dias_restantes} dia(s)</i>"
+                data_exibicao = exp_date.strftime("%d-%m-%Y")
+            else:
+                status_dias = "❓ Data inválida"
+                data_exibicao = str(data_exp)
+
+            mensagem += f" └ 📧 <code>{email_end}</code>\n 📅 Validade: {data_exibicao} ({status_dias})\n"
         mensagem += "\n"
 
     if len(mensagem) > 4000:
@@ -858,12 +1317,12 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
     email_original = update.message.text.strip().lower()
 
     clientes = carregar_json("clientes.json")
-    eh_admin = (user_id == str(ADMIN_ID).strip())
+    eh_admin = eh_admin_master(user_id)
     dados_cliente = clientes.get(user_id, {})
 
     if not eh_admin and (not dados_cliente or not dados_cliente.get("emails_permitidos")) and not dados_cliente.get("permitir_sensivel"):
         await update.message.reply_text(
-            f"🔒 <b>Acesso Não Liberado!</b>\n\nSeu ID de Usuário: <code>{user_id}</code>\n\nEncaminhe ao Suporte para liberação.",
+            f"🔒 <b>Acesso Não Liberado!</b>\n\nSeu ID de Usuário: <code>{user_id}</code>\n\nEncaminhe ao Suporte/Revendedor para liberação.",
             parse_mode="HTML"
         )
         return
@@ -896,7 +1355,7 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
         if not tem_acesso:
             if email_expirado:
                 await update.message.reply_text(
-                    f"🛑 <b>Acesso Expirado!</b>\n\nA autorização para o e-mail <code>{email_original}</code> já venceu. Entre em contato com o suporte para renovar.",
+                    f"🛑 <b>Acesso Expirado!</b>\n\nA autorização para o e-mail <code>{email_original}</code> já venceu. Entre em contato com seu revendedor.",
                     parse_mode="HTML"
                 )
             else:
@@ -909,7 +1368,7 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
     email_base = normalizar_email_gmail(email_original)
     contas = carregar_json("contas.json")
     conta_encontrada = None
-    
+
     if isinstance(contas, dict):
         for chave_email, dados in contas.items():
             chave_norm = normalizar_email_gmail(chave_email)
@@ -919,7 +1378,7 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
 
     if not conta_encontrada:
         await update.message.reply_text(
-            f"❌ A conta <code>{email_original}</code> não possui as credenciais cadastradas no <code>contas.json</code>.",
+            f"❌ A conta <code>{email_original}</code> não possui credenciais salvas no banco de dados.",
             parse_mode="HTML"
         )
         return
@@ -955,20 +1414,35 @@ def main():
         try:
             app = ApplicationBuilder().token(TOKEN_TELEGRAM).build()
 
+            # Inicia o verificador em segundo plano para alertas de vencimento
+            asyncio.get_event_loop().create_task(verificar_alertas_vencimento(app))
+
+            # Comandos Públicos
             app.add_handler(CommandHandler("start", start))
+            app.add_handler(CommandHandler("menu", menu_comando))
+            app.add_handler(CommandHandler("admin", menu_comando))
+            app.add_handler(CallbackQueryHandler(tutorial_callback))
+
+            # Comandos do Master Admin
+            app.add_handler(CommandHandler("addrevenda", add_revenda_comando))
+            app.add_handler(CommandHandler("delrevenda", del_revenda_comando))
+            app.add_handler(CommandHandler("listarrevendas", listar_revendas_comando))
+            app.add_handler(CommandHandler("notificacoes", toggle_notificacoes_comando))
+            app.add_handler(CommandHandler("vip", vip_comando))
+
+            # Comandos dos Revendedores (e Master)
+            app.add_handler(CommandHandler("addconta", add_conta_comando))
+            app.add_handler(CommandHandler("delconta", del_conta_comando))
+            app.add_handler(CommandHandler("listarcontas", listar_contas_comando))
             app.add_handler(CommandHandler("autorizar", autorizar_cliente))
             app.add_handler(CommandHandler("editar", editar_comando))
             app.add_handler(CommandHandler("remover", remover_comando))
-            app.add_handler(CommandHandler("vip", vip_comando))
-            app.add_handler(CommandHandler("limpar", limpar_nao_vip))
-            app.add_handler(CommandHandler("limpar_nao_vip", limpar_nao_vip))
             app.add_handler(CommandHandler("listar", listar_clientes))
-            
-            app.add_handler(CallbackQueryHandler(tutorial_callback))
-            
+
+            # Captura de E-mails
             app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receber_mensagem_email))
 
-            print("🤖 Bot iniciado e rodando no Render com prioridade para links de botões da Netflix...")
+            print("🤖 Bot iniciado com avisos de vencimento, painel /menu e suporte total a revendas!")
             app.run_polling(poll_interval=1.0, timeout=20)
         except Exception as e:
             logging.error(f"Ocorreu uma queda temporária no Bot: {e}. Reconectando em 5 segundos...")
