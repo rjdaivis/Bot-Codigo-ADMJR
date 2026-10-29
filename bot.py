@@ -34,7 +34,7 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-TOKEN_TELEGRAM = os.environ.get("TOKEN_TELEGRAM", "SEU_TOKEN_AQUI").strip()
+TOKEN_TELEGRAM_MASTER = os.environ.get("TOKEN_TELEGRAM", "SEU_TOKEN_AQUI").strip()
 ADMIN_ID = os.environ.get("ADMIN_ID", "7496198484").strip()
 
 RAW_SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip()
@@ -57,6 +57,9 @@ CLIENTES_FIXOS_PADRAO = {
         "criado_por": str(ADMIN_ID)
     }
 }
+
+# Dicionário global para controlar múltiplas instâncias de Bots rodando simultaneamente
+APLICACOES_BOTS = {}
 
 # ==========================================
 # PARSER ESTRUTURADO DE HTML
@@ -125,14 +128,14 @@ app_flask = Flask('')
 
 @app_flask.route('/')
 def home():
-    return "Bot de Códigos Multi-Revendas Online"
+    return "Bot de Códigos Multi-Revendas White-Label Online"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app_flask.run(host='0.0.0.0', port=port)
 
 # ==========================================
-# BANCO DE DADOS E PERSISTÊNCIA (CONTAS, REVENDAS, CLIENTES, CONFIG)
+# BANCO DE DADOS E PERSISTÊNCIA (CONTAS, REVENDAS, CLIENTES, BOTS)
 # ==========================================
 def carregar_json(caminho: str) -> dict:
     if caminho == "clientes.json":
@@ -143,6 +146,8 @@ def carregar_json(caminho: str) -> dict:
         return carregar_revendedores_db()
     elif caminho == "config.json":
         return carregar_config_db()
+    elif caminho == "bots.json":
+        return carregar_bots_db()
 
     dados = {}
     try:
@@ -166,6 +171,9 @@ def salvar_json(caminho: str, dados: dict):
     elif caminho == "config.json":
         salvar_config_db(dados)
         return
+    elif caminho == "bots.json":
+        salvar_bots_db(dados)
+        return
 
     try:
         caminho_tmp = f"{caminho}.tmp"
@@ -174,6 +182,41 @@ def salvar_json(caminho: str, dados: dict):
         os.replace(caminho_tmp, caminho)
     except Exception as e:
         logging.error(f"Erro ao salvar {caminho}: {e}")
+
+# --- GERENCIAMENTO DE BOTS WHITE-LABEL ---
+def carregar_bots_db() -> dict:
+    dados = {}
+    if supabase:
+        try:
+            res = supabase.table("bots_revenda").select("*").execute()
+            if res.data:
+                for row in res.data:
+                    tok = str(row.get("token")).strip()
+                    dados[tok] = {"dono_id": str(row.get("dono_id")).strip()}
+        except Exception:
+            pass
+    if not dados and os.path.exists("bots.json"):
+        try:
+            with open("bots.json", "r", encoding="utf-8") as f:
+                dados = json.load(f)
+        except Exception:
+            pass
+    return dados
+
+def salvar_bots_db(dados: dict):
+    try:
+        with open("bots.json.tmp", "w", encoding="utf-8") as f:
+            json.dump(dados, f, indent=2, ensure_ascii=False)
+        os.replace("bots.json.tmp", "bots.json")
+    except Exception:
+        pass
+
+    if supabase:
+        try:
+            for tok, info in dados.items():
+                supabase.table("bots_revenda").upsert({"token": tok, "dono_id": str(info.get("dono_id"))}).execute()
+        except Exception:
+            pass
 
 # --- CONFIGURAÇÕES GERAIS ---
 def carregar_config_db() -> dict:
@@ -732,14 +775,12 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 # MOTOR DE ALERTAS E NOTIFICAÇÕES AUTOMÁTICAS
 # ==========================================
 async def verificar_alertas_vencimento(app):
-    """Verifica e notifica revendedores e clientes 1 dia antes do vencimento do acesso."""
     while True:
         try:
-            await asyncio.sleep(3600)  # Executa a cada 1 hora
+            await asyncio.sleep(3600)
             hoje = datetime.now().date()
             amanha = hoje + timedelta(days=1)
 
-            # 1. ALERTAR REVENDEDORES (1 dia antes do acesso expirar)
             revendedores = carregar_json("revendedores.json")
             alterado_rev = False
             for r_id, info in revendedores.items():
@@ -753,7 +794,7 @@ async def verificar_alertas_vencimento(app):
                             text=(
                                 f"⚠️ <b>AVISO DE VENCIMENTO DE REVENDA!</b>\n\n"
                                 f"Sua assinatura como Revendedor expira <b>amanhã ({amanha.strftime('%d-%m-%Y')})</b>.\n\n"
-                                f"📞 Entre em contato com o <b>Administrador Master</b> para efetuar a renovação e manter o acesso dos seus clientes ativos!"
+                                f"📞 Entre em contato com o <b>Administrador Master</b> para efetuar a renovação!"
                             ),
                             parse_mode="HTML"
                         )
@@ -765,7 +806,6 @@ async def verificar_alertas_vencimento(app):
             if alterado_rev:
                 salvar_json("revendedores.json", revendedores)
 
-            # 2. ALERTAR CLIENTES (1 dia antes de perder o e-mail - OPCIONAL)
             config = carregar_json("config.json")
             if config.get("notificar_clientes", True):
                 clientes = carregar_json("clientes.json")
@@ -787,7 +827,7 @@ async def verificar_alertas_vencimento(app):
                                     text=(
                                         f"⏳ <b>AVISO DE VENCIMENTO DE ACESSO!</b>\n\n"
                                         f"O seu acesso ao e-mail <code>{email_c}</code> expira <b>amanhã ({amanha.strftime('%d-%m-%Y')})</b>.\n\n"
-                                        f"🔄 Caso queira renovar e continuar usando sem interrupções, entre em contato com o suporte/revendedor agora mesmo!"
+                                        f"🔄 Entre em contato com o suporte/revendedor para renovar sem interrupção!"
                                     ),
                                     parse_mode="HTML"
                                 )
@@ -844,6 +884,10 @@ async def menu_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• <code>/addrevenda ID_TELEGRAM DIAS_OU_DATA</code> - Adicionar Revendedor\n"
             "• <code>/delrevenda ID_TELEGRAM</code> - Remover Revendedor\n"
             "• <code>/listarrevendas</code> - Ver Revendedores e Métricas\n\n"
+            "<b>Bots White-Label (Marca Própria):</b>\n"
+            "• <code>/addbot TOKEN ID_REVENDEDOR</code> - Vincular Bot para Revenda\n"
+            "• <code>/delbot TOKEN</code> - Remover Bot de Revenda\n"
+            "• <code>/listarbots</code> - Listar Bots Ativos\n\n"
             "<b>Gerenciamento de Contas e Clientes:</b>\n"
             "• <code>/addconta EMAIL SENHA_APP</code> - Cadastrar E-mail\n"
             "• <code>/delconta EMAIL</code> - Remover E-mail\n"
@@ -886,6 +930,85 @@ async def tutorial_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(texto_tutorial, parse_mode="HTML")
     elif query.data == "menu_admin":
         await menu_comando(update, context)
+
+# ==========================================
+# GERENCIAMENTO DE BOTS WHITE-LABEL (MASTER ADM)
+# ==========================================
+async def add_bot_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id).strip()
+    if not eh_admin_master(user_id):
+        return
+
+    if len(context.args) < 2:
+        await update.message.reply_text(
+            "⚠️ <b>Uso correto:</b> <code>/addbot TOKEN ID_REVENDEDOR</code>\n\n"
+            "Exemplo: <code>/addbot 123456789:ABCdefGHI... 7496198484</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    token_bot = str(context.args[0]).strip()
+    dono_revenda_id = str(context.args[1]).strip()
+
+    bots = carregar_json("bots.json")
+    bots[token_bot] = {"dono_id": dono_revenda_id}
+    salvar_json("bots.json", bots)
+
+    # Iniciar dinamicamente a nova aplicação do Bot no asyncio loop atual
+    loop = asyncio.get_running_loop()
+    loop.create_task(iniciar_instancia_bot(token_bot, dono_revenda_id))
+
+    await update.message.reply_text(
+        f"🤖 <b>Bot White-Label Ativado com Sucesso!</b>\n\n"
+        f"👤 <b>Dono do Bot (Revenda):</b> <code>{dono_revenda_id}</code>\n"
+        f"🔑 <b>Token:</b> <code>{token_bot[:10]}...</code>\n\n"
+        f"Este bot agora está rodando e responderá aos clientes dessa revenda!",
+        parse_mode="HTML"
+    )
+
+async def del_bot_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id).strip()
+    if not eh_admin_master(user_id):
+        return
+
+    if not context.args:
+        await update.message.reply_text("⚠️ <b>Uso correto:</b> <code>/delbot TOKEN</code>", parse_mode="HTML")
+        return
+
+    token_target = str(context.args[0]).strip()
+    bots = carregar_json("bots.json")
+
+    if token_target in bots:
+        del bots[token_target]
+        salvar_json("bots.json", bots)
+
+        if token_target in APLICACOES_BOTS:
+            try:
+                await APLICACOES_BOTS[token_target].stop()
+                await APLICACOES_BOTS[token_target].shutdown()
+                del APLICACOES_BOTS[token_target]
+            except Exception as e:
+                logging.error(f"Erro ao parar bot: {e}")
+
+        await update.message.reply_text(f"🗑️ Bot removido e desativado com sucesso!", parse_mode="HTML")
+    else:
+        await update.message.reply_text("❌ Token de Bot não localizado.", parse_mode="HTML")
+
+async def listar_bots_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id).strip()
+    if not eh_admin_master(user_id):
+        return
+
+    bots = carregar_json("bots.json")
+    if not bots:
+        await update.message.reply_text("📋 <b>Nenhum bot White-Label ativo no momento.</b>", parse_mode="HTML")
+        return
+
+    msg = "🤖 <b>Lista de Bots White-Label Ativos:</b>\n\n"
+    for tok, info in bots.items():
+        msg += f"👤 <b>Dono ID:</b> <code>{info.get('dono_id')}</code>\n └ 🔑 Token: <code>{tok[:15]}...</code>\n\n"
+
+    await update.message.reply_text(msg, parse_mode="HTML")
 
 # ==========================================
 # GERENCIAMENTO DE REVENDEDORES (MASTER ADM)
@@ -1005,7 +1128,7 @@ async def toggle_notificacoes_comando(update: Update, context: ContextTypes.DEFA
     await update.message.reply_text(f"⚙️ <b>Notificações de Clientes:</b> {status_txt}", parse_mode="HTML")
 
 # ==========================================
-# GERENCIAMENTO DE CONTAS DO BANCO (E-MAIL + SENHA DO APP)
+# GERENCIAMENTO DE CONTAS DO BANCO
 # ==========================================
 async def add_conta_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id).strip()
@@ -1316,6 +1439,9 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
     user_id = str(update.effective_user.id).strip()
     email_original = update.message.text.strip().lower()
 
+    # Identificar se a requisição veio de um Bot de Revenda White-Label
+    bot_dono_id = context.bot_data.get("dono_id")
+
     clientes = carregar_json("clientes.json")
     eh_admin = eh_admin_master(user_id)
     dados_cliente = clientes.get(user_id, {})
@@ -1373,6 +1499,10 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
         for chave_email, dados in contas.items():
             chave_norm = normalizar_email_gmail(chave_email)
             if chave_email.strip().lower() == email_original or chave_norm == email_base:
+                # Se for bot de revenda, filtrar apenas contas pertencentes àquela revenda
+                dono_conta = str(dados.get("dono_id", ADMIN_ID))
+                if bot_dono_id and not eh_admin and dono_conta != bot_dono_id:
+                    continue
                 conta_encontrada = dados if isinstance(dados, dict) else {"senha": dados}
                 break
 
@@ -1405,51 +1535,101 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
         logging.error(f"Erro ao editar mensagem: {e}")
 
 # ==========================================
-# INICIALIZAÇÃO E EXECUÇÃO DO BOT
+# MOTOR E INICIALIZAÇÃO DE MÚLTIPLOS BOTS
 # ==========================================
+def construir_aplicacao_bot(token: str, dono_id: str = None):
+    app = ApplicationBuilder().token(token).build()
+    if dono_id:
+        app.bot_data["dono_id"] = str(dono_id)
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("menu", menu_comando))
+    app.add_handler(CommandHandler("admin", menu_comando))
+    app.add_handler(CallbackQueryHandler(tutorial_callback))
+
+    # Comandos Master
+    app.add_handler(CommandHandler("addbot", add_bot_comando))
+    app.add_handler(CommandHandler("delbot", del_bot_comando))
+    app.add_handler(CommandHandler("listarbots", listar_bots_comando))
+    app.add_handler(CommandHandler("addrevenda", add_revenda_comando))
+    app.add_handler(CommandHandler("delrevenda", del_revenda_comando))
+    app.add_handler(CommandHandler("listarrevendas", listar_revendas_comando))
+    app.add_handler(CommandHandler("notificacoes", toggle_notificacoes_comando))
+    app.add_handler(CommandHandler("vip", vip_comando))
+
+    # Comandos Revendedor
+    app.add_handler(CommandHandler("addconta", add_conta_comando))
+    app.add_handler(CommandHandler("delconta", del_conta_comando))
+    app.add_handler(CommandHandler("listarcontas", listar_contas_comando))
+    app.add_handler(CommandHandler("autorizar", autorizar_cliente))
+    app.add_handler(CommandHandler("editar", editar_comando))
+    app.add_handler(CommandHandler("remover", remover_comando))
+    app.add_handler(CommandHandler("listar", listar_clientes))
+
+    # Captura de Texto
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receber_mensagem_email))
+
+    return app
+
+async def iniciar_instancia_bot(token: str, dono_id: str = None):
+    try:
+        app = construir_aplicacao_bot(token, dono_id)
+        APLICACOES_BOTS[token] = app
+        await app.initialize()
+        await app.start()
+        await app.updater.start_polling(poll_interval=1.0, timeout=20)
+        logging.info(f"✅ Bot White-Label iniciado com sucesso! (Dono: {dono_id})")
+    except Exception as e:
+        logging.error(f"Erro ao iniciar bot White-Label ({token[:10]}...): {e}")
+
 async def post_init(application):
-    """Inicializa as tarefas em segundo plano de forma 100% segura e assíncrona."""
     asyncio.create_task(verificar_alertas_vencimento(application))
+    
+    # Iniciar todos os bots de revenda salvos
+    bots_cadastrados = carregar_json("bots.json")
+    for token_bot, info in bots_cadastrados.items():
+        if token_bot != TOKEN_TELEGRAM_MASTER:
+            asyncio.create_task(iniciar_instancia_bot(token_bot, info.get("dono_id")))
 
 def main():
     Thread(target=run_flask, daemon=True).start()
 
     while True:
         try:
-            app = (
+            app_master = (
                 ApplicationBuilder()
-                .token(TOKEN_TELEGRAM)
+                .token(TOKEN_TELEGRAM_MASTER)
                 .post_init(post_init)
                 .build()
             )
 
-            # Comandos Públicos
-            app.add_handler(CommandHandler("start", start))
-            app.add_handler(CommandHandler("menu", menu_comando))
-            app.add_handler(CommandHandler("admin", menu_comando))
-            app.add_handler(CallbackQueryHandler(tutorial_callback))
+            # Configurar handlers no Bot Master
+            app_master.add_handler(CommandHandler("start", start))
+            app_master.add_handler(CommandHandler("menu", menu_comando))
+            app_master.add_handler(CommandHandler("admin", menu_comando))
+            app_master.add_handler(CallbackQueryHandler(tutorial_callback))
 
-            # Comandos do Master Admin
-            app.add_handler(CommandHandler("addrevenda", add_revenda_comando))
-            app.add_handler(CommandHandler("delrevenda", del_revenda_comando))
-            app.add_handler(CommandHandler("listarrevendas", listar_revendas_comando))
-            app.add_handler(CommandHandler("notificacoes", toggle_notificacoes_comando))
-            app.add_handler(CommandHandler("vip", vip_comando))
+            app_master.add_handler(CommandHandler("addbot", add_bot_comando))
+            app_master.add_handler(CommandHandler("delbot", del_bot_comando))
+            app_master.add_handler(CommandHandler("listarbots", listar_bots_comando))
+            app_master.add_handler(CommandHandler("addrevenda", add_revenda_comando))
+            app_master.add_handler(CommandHandler("delrevenda", del_revenda_comando))
+            app_master.add_handler(CommandHandler("listarrevendas", listar_revendas_comando))
+            app_master.add_handler(CommandHandler("notificacoes", toggle_notificacoes_comando))
+            app_master.add_handler(CommandHandler("vip", vip_comando))
 
-            # Comandos dos Revendedores (e Master)
-            app.add_handler(CommandHandler("addconta", add_conta_comando))
-            app.add_handler(CommandHandler("delconta", del_conta_comando))
-            app.add_handler(CommandHandler("listarcontas", listar_contas_comando))
-            app.add_handler(CommandHandler("autorizar", autorizar_cliente))
-            app.add_handler(CommandHandler("editar", editar_comando))
-            app.add_handler(CommandHandler("remover", remover_comando))
-            app.add_handler(CommandHandler("listar", listar_clientes))
+            app_master.add_handler(CommandHandler("addconta", add_conta_comando))
+            app_master.add_handler(CommandHandler("delconta", del_conta_comando))
+            app_master.add_handler(CommandHandler("listarcontas", listar_contas_comando))
+            app_master.add_handler(CommandHandler("autorizar", autorizar_cliente))
+            app_master.add_handler(CommandHandler("editar", editar_comando))
+            app_master.add_handler(CommandHandler("remover", remover_comando))
+            app_master.add_handler(CommandHandler("listar", listar_clientes))
 
-            # Captura de E-mails
-            app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receber_mensagem_email))
+            app_master.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receber_mensagem_email))
 
-            print("🤖 Bot iniciado com avisos de vencimento, painel /menu e suporte total a revendas!")
-            app.run_polling(poll_interval=1.0, timeout=20)
+            print("🤖 Bot Master e Sistema Multi-Bot White-Label ativos e rodando!")
+            app_master.run_polling(poll_interval=1.0, timeout=20)
         except Exception as e:
             logging.error(f"Ocorreu uma queda temporária no Bot: {e}. Reconectando em 5 segundos...")
             time.sleep(5)
