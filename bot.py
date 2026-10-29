@@ -81,7 +81,6 @@ def obter_teclado_usuario(user_id: str) -> ReplyKeyboardMarkup:
             [KeyboardButton("⚠️ Reportar Erro / Print")]
         ]
     else:
-        # MENU SIMPLIFICADO APENAS PARA CLIENTES
         botoes = [
             [KeyboardButton("📖 Como Usar")],
             [KeyboardButton("⚠️ Reportar Erro / Print")]
@@ -1853,7 +1852,7 @@ def main():
 
             app_master.add_handler(MessageHandler((filters.TEXT | filters.PHOTO) & ~filters.COMMAND, receber_mensagem_email))
 
-            print("🤖 Bot Master e Sistema Multi-Bot rodando com reporte de erros liberado para revendedores!")
+            print("🤖 Bot Master e Sistema Multi-Bot rodando com motor de busca original e botões atualizados!")
             app_master.run_polling(poll_interval=1.0, timeout=20)
         except Exception as e:
             logging.error(f"Ocorreu uma queda temporária no Bot: {e}. Reconectando em 5 segundos...")
