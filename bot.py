@@ -66,7 +66,7 @@ CLIENTES_FIXOS_PADRAO = {
 APLICACOES_BOTS = {}
 
 # ==========================================
-# NOVO: TECLADO DINÂMICO DE ATALHOS (ACRESCENTADO)
+# TECLADO DINÂMICO DE ATALHOS
 # ==========================================
 def obter_teclado_usuario(user_id: str) -> ReplyKeyboardMarkup:
     user_id_str = str(user_id).strip()
@@ -136,7 +136,6 @@ def extrair_anchors_html(corpo_html: str):
 # FUNÇÕES AUXILIARES DE DATAS/TEXTO (ORIGINAL DO PDF)
 # ==========================================
 def converter_para_date(data_str: str):
-    """Converte qualquer string de data (ISO, YYYY-MM-DD, DD-MM-YYYY) para um objeto date."""
     if not data_str:
         return None
     data_limpa = str(data_str).split("T")[0].strip()
@@ -149,7 +148,6 @@ def converter_para_date(data_str: str):
     return None
 
 def formatar_data_exibicao_br(data_str: str) -> str:
-    """Converte a data para o formato visual DD-MM-AAAA."""
     dt_obj = converter_para_date(data_str)
     if dt_obj:
         return dt_obj.strftime("%d-%m-%Y")
@@ -169,10 +167,20 @@ def run_flask():
     app_flask.run(host='0.0.0.0', port=port)
 
 # ==========================================
-# PERSISTÊNCIA E BANCO DE DADOS (AMPLIADO SEM ALTERAR O EXISTENTE)
+# PERSISTÊNCIA E BANCO DE DADOS (PRIORIDADE LOCAL CORRIGIDA)
 # ==========================================
 def carregar_clientes_db() -> dict:
     dados = {}
+    
+    # 1. Lê PRIMEIRO o arquivo local clientes.json
+    if os.path.exists("clientes.json"):
+        try:
+            with open("clientes.json", "r", encoding="utf-8") as f:
+                dados = json.load(f)
+        except Exception as e:
+            logging.error(f"Erro ao ler clientes.json local: {e}")
+
+    # 2. Mescla dados do Supabase sem apagar atualizações recentes do arquivo local
     if supabase:
         try:
             res = supabase.table("clientes_bot").select("*").execute()
@@ -184,22 +192,23 @@ def carregar_clientes_db() -> dict:
                     criado = str(row.get("criado_por", ADMIN_ID))
                     alertas = row.get("alertas_enviados") or {}
                     
-                    dados[tid] = {
-                        "emails_permitidos": emails,
-                        "permitir_sensivel": permitir,
-                        "criado_por": criado,
-                        "alertas_enviados": alertas
-                    }
+                    if tid not in dados:
+                        dados[tid] = {
+                            "emails_permitidos": emails,
+                            "permitir_sensivel": permitir,
+                            "criado_por": criado,
+                            "alertas_enviados": alertas
+                        }
+                    else:
+                        for e_k, e_v in emails.items():
+                            if e_k not in dados[tid]["emails_permitidos"]:
+                                dados[tid]["emails_permitidos"][e_k] = e_v
+                        if permitir:
+                            dados[tid]["permitir_sensivel"] = True
         except Exception as e:
             logging.error(f"Erro ao carregar clientes do Supabase: {e}")
 
-    if not dados and os.path.exists("clientes.json"):
-        try:
-            with open("clientes.json", "r", encoding="utf-8") as f:
-                dados = json.load(f)
-        except Exception as e:
-            logging.error(f"Erro ao ler clientes.json local: {e}")
-
+    # 3. Garante que IDs master padrão fiquem ativos
     for id_fixo, info_fixa in CLIENTES_FIXOS_PADRAO.items():
         if id_fixo not in dados:
             dados[id_fixo] = {
@@ -211,6 +220,7 @@ def carregar_clientes_db() -> dict:
     return dados
 
 def salvar_clientes_db(dados: dict):
+    # 1. Grava no arquivo local imediatamente
     try:
         caminho_tmp = "clientes.json.tmp"
         with open(caminho_tmp, "w", encoding="utf-8") as f:
@@ -219,6 +229,7 @@ def salvar_clientes_db(dados: dict):
     except Exception as e:
         logging.error(f"Erro ao salvar clientes.json local: {e}")
 
+    # 2. Atualiza no Supabase em segundo plano
     if supabase:
         try:
             for telegram_id, info in dados.items():
@@ -234,7 +245,6 @@ def salvar_clientes_db(dados: dict):
         except Exception as e:
             logging.error(f"Erro ao salvar no Supabase: {e}")
 
-# BANCOS ADICIONAIS PARA REVENDA / BOTS / ERROS
 def carregar_revendedores_db() -> dict:
     dados = {}
     if os.path.exists("revendedores.json"):
@@ -249,12 +259,13 @@ def carregar_revendedores_db() -> dict:
             if res.data:
                 for row in res.data:
                     t_id = str(row.get("telegram_id")).strip()
-                    dados[t_id] = {
-                        "cadastrado_em": row.get("cadastrado_em", ""),
-                        "expira_em": row.get("expira_em", "2030-12-31"),
-                        "cadastrado_por": str(row.get("cadastrado_por", ADMIN_ID)),
-                        "alerta_expiracao_enviado": bool(row.get("alerta_expiracao_enviado", False))
-                    }
+                    if t_id not in dados:
+                        dados[t_id] = {
+                            "cadastrado_em": row.get("cadastrado_em", ""),
+                            "expira_em": row.get("expira_em", "2030-12-31"),
+                            "cadastrado_por": str(row.get("cadastrado_por", ADMIN_ID)),
+                            "alerta_expiracao_enviado": bool(row.get("alerta_expiracao_enviado", False))
+                        }
         except Exception:
             pass
     return dados
@@ -294,13 +305,14 @@ def carregar_contas_db() -> dict:
             if res.data:
                 for row in res.data:
                     email_c = str(row.get("email")).strip().lower()
-                    dados[email_c] = {
-                        "senha": row.get("senha"),
-                        "host_imap": row.get("host_imap", "imap.gmail.com"),
-                        "porta": row.get("porta", 993),
-                        "email_login": row.get("email_login", email_c),
-                        "dono_id": str(row.get("dono_id", ADMIN_ID))
-                    }
+                    if email_c not in dados:
+                        dados[email_c] = {
+                            "senha": row.get("senha"),
+                            "host_imap": row.get("host_imap", "imap.gmail.com"),
+                            "porta": row.get("porta", 993),
+                            "email_login": row.get("email_login", email_c),
+                            "dono_id": str(row.get("dono_id", ADMIN_ID))
+                        }
         except Exception:
             pass
     return dados
@@ -341,7 +353,8 @@ def carregar_bots_db() -> dict:
             if res.data:
                 for row in res.data:
                     tok = str(row.get("token")).strip()
-                    dados[tok] = {"dono_id": str(row.get("dono_id")).strip()}
+                    if tok not in dados:
+                        dados[tok] = {"dono_id": str(row.get("dono_id")).strip()}
         except Exception:
             pass
     return dados
@@ -499,7 +512,7 @@ def eh_revendedor(user_id: str) -> bool:
     return False
 
 # ==========================================
-# MOTOR DE TRATAMENTO E EXTRAÇÃO IMAP (100% IDÊNTICO AO PDF)
+# MOTOR DE TRATAMENTO E EXTRAÇÃO IMAP (ORIGINAL DO PDF)
 # ==========================================
 def normalizar_email_gmail(email_str: str) -> str:
     if not email_str:
@@ -554,17 +567,11 @@ def limpar_url_link(link: str) -> str:
     return link_limpo.strip()
 
 def extrair_link_acao_netflix(corpo_html: str):
-    """
-    Procura links de botões de ação na Netflix (Residência, Viagem,
-    Receber Código, Redefinição).
-    Retorna (link, tipo) ou (None, None).
-    """
     if not corpo_html:
         return None, None
     bloqueadas = ["unsubscribe", "help.netflix.com", "privacy", "terms", "facebook", "twitter", "instagram"]
     anchors = extrair_anchors_html(corpo_html)
 
-    # 1. Pelo texto do BOTÃO (Anchor text)
     for href, text in anchors:
         l_limpo = limpar_url_link(href)
         l_lower = l_limpo.lower()
@@ -577,7 +584,6 @@ def extrair_link_acao_netflix(corpo_html: str):
             if any(p in txt_lower for p in ["redefinir senha", "redefinir sua senha", "alterar senha", "reset password"]):
                 return l_limpo, "redefinicao"
 
-    # 2. Pela estrutura da URL
     for href, text in anchors:
         l_limpo = limpar_url_link(href)
         l_lower = l_limpo.lower()
@@ -716,7 +722,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             eh_netflix = ("netflix" in remetente_lower or "netflix" in assunto_lower or "netflix" in corpo_html.lower())
             eh_disney = ("disney" in remetente_lower or "disney" in assunto_lower or "disneyplus" in corpo_html.lower())
 
-            # 1. DISNEY+: CÓDIGOS DE 6 DÍGITOS
             if eh_disney:
                 codigos = re.findall(r'\b\d{6}\b', corpo_texto_puro)
                 if not codigos:
@@ -727,9 +732,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     mail.logout()
                     return f"✅ <b>Código Disney+ Encontrado!</b>\n\nSeu código é: <code>{codigo_valido}</code>\n\n<i>E-mail recebido há {minutos} minuto(s).</i>"
 
-            # 2. NETFLIX: TRATAMENTO COMPLETO E FLEXÍVEL
             if eh_netflix:
-                # PASSO 1: VERIFICAR SE EXISTE UM BOTÃO/LINK DE AÇÃO NO E-MAIL
                 link_acao, tipo_acao = extrair_link_acao_netflix(corpo_html)
 
                 if link_acao:
@@ -764,7 +767,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                             f"<i>E-mail recebido há {minutos} minuto(s).</i>"
                         )
 
-                # PASSO 2: SE NÃO HOUVER BOTÃO DE AÇÃO, PROCURAR CÓDIGO NUMÉRICO IMPRESSO NO TEXTO
                 texto_limpo = re.sub(r'\b\d{1,2}:\d{2}(?::\d{2})?\b', '', corpo_texto_puro)
                 texto_limpo = re.sub(r'\b\d{1,2}\s+de\s+[a-zç]+\b', '', texto_limpo, flags=re.IGNORECASE)
 
@@ -776,7 +778,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     mail.logout()
                     return f"✅ <b>Código de Acesso Netflix Encontrado!</b>\n\nSeu código é: <code>{codigo_valido}</code>\n\n<i>E-mail recebido há {minutos} minuto(s).</i>"
 
-                # PASSO 3: FALLBACK DE LINK GENÉRICO
                 link_fallback = extrair_url_pura_href(corpo_html, "netflix.com")
                 if link_fallback and not any(x in link_fallback for x in ["unsubscribe", "help", "privacy", "terms"]):
                     mail.close()
@@ -787,7 +788,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         f"<i>E-mail recebido há {minutos} minuto(s).</i>"
                     )
 
-            # 3. CÓDIGO NUMÉRICO DE ENTRADA / ACESSO GERAL
             eh_email_codigo = any(p in assunto_lower for p in ["código", "codigo", "temporário", "temporario", "autorização", "autorizacao", "verificação", "verificacao"])
             if eh_email_codigo:
                 texto_limpo = re.sub(r'\b\d{1,2}:\d{2}(?::\d{2})?\b', '', corpo_texto_puro)
@@ -798,7 +798,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     mail.logout()
                     return f"✅ <b>Código Encontrado!</b>\n\nSeu código é: <code>{codigo_valido}</code>\n\n<i>E-mail recebido há {minutos} minuto(s).</i>"
 
-            # 4. SEGURANÇA VIP OUTROS STREAMINGS (REDEFINIÇÃO DE SENHA)
             eh_redefinicao = (
                 any(p in assunto_lower for p in ["redefinir", "recuperar", "alteração de senha", "alterar senha", "reset password", "restabelecer senha"])
                 or ("recuperar" in assunto_lower and "senha" in assunto_lower)
@@ -823,7 +822,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                         f"<i>E-mail recebido há {minutos} minuto(s).</i>"
                     )
 
-            # 5. CASO GENÉRICO DE FALLBACK DE CÓDIGO
             texto_limpo = re.sub(r'\b\d{1,2}:\d{2}(?::\d{2})?\b', '', corpo_texto_puro)
             codigos_encontrados = re.findall(r'\b\d{4,6}\b', texto_limpo)
             codigo_valido = next((c for c in codigos_encontrados if not c.startswith("0800") and c not in ["2024", "2025", "2026", "2027"]), None)
@@ -857,7 +855,7 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
             pass
 
 # ==========================================
-# ROTINA DE ALERTAS DE VENCIMENTO (ACRESCENTADO)
+# ROTINA DE ALERTAS DE VENCIMENTO
 # ==========================================
 async def verificar_alertas_vencimento(app):
     while True:
@@ -930,7 +928,7 @@ async def verificar_alertas_vencimento(app):
             logging.error(f"Erro na rotina de alertas: {err}")
 
 # ==========================================
-# TUTORIAIS E ERROS REPORTADOS (ACRESCENTADO)
+# TUTORIAIS E ERROS REPORTADOS
 # ==========================================
 async def senhas_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id).strip()
@@ -988,10 +986,6 @@ async def listar_erros_comando(update: Update, context: ContextTypes.DEFAULT_TYP
 # ==========================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id).strip()
-    keyboard = [
-        [InlineKeyboardButton("Como Usar / Tutorial", callback_data="tutorial")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_text(
         f"<b>Central de Liberação de Códigos</b>\n\n"
@@ -1141,7 +1135,6 @@ async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 async def vip_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando /vip <telegram_id> sim/nao para liberar busca ilimitada de e-mails."""
     if str(update.effective_user.id).strip() != str(ADMIN_ID).strip():
         return
 
@@ -1161,14 +1154,13 @@ async def vip_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     salvar_json("clientes.json", clientes)
 
-    txt_status = "ATIVADO \nEste Telegram ID agora possui **busca ilimitada** para qualquer e-mail digitado!" if status_vip else "DESATIVADO\nEste Telegram ID voltou a depender de e-mails específicos autorizados."
+    txt_status = "ATIVADO \nEste Telegram ID agora possui busca ilimitada para qualquer e-mail digitado!" if status_vip else "DESATIVADO\nEste Telegram ID voltou a depender de e-mails específicos autorizados."
     await update.message.reply_text(
         f"<b>Status VIP do ID <code>{target_id}</code>:</b> {txt_status}",
         parse_mode="HTML"
     )
 
 async def editar_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando /editar <telegram_id> <email> <nova_data_DD-MM-AAAA ou sem data>."""
     user_id = str(update.effective_user.id).strip()
     if not eh_revendedor(user_id):
         return
@@ -1222,7 +1214,6 @@ async def editar_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def remover_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando /remover <telegram_id> <email>."""
     user_id = str(update.effective_user.id).strip()
     if not eh_revendedor(user_id):
         return
@@ -1333,7 +1324,6 @@ async def listar_clientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(mensagem, parse_mode="HTML")
 
-# COMANDOS ADICIONAIS DE REVENDA E CONTAS
 async def add_revenda_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id).strip()
     if not eh_admin_master(user_id):
@@ -1581,12 +1571,11 @@ async def listar_contas_comando(update: Update, context: ContextTypes.DEFAULT_TY
 
     await update.message.reply_text(msg, parse_mode="HTML")
 
-# PROCESSAMENTO DE MENSAGENS E BUSCA IMAP (PRESERVANDO FLUXO ORIGINAL)
+# PROCESSAMENTO DE MENSAGENS E BUSCA IMAP
 async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id).strip()
     texto_recebido = update.message.text.strip() if update.message.text else ""
 
-    # 1. ATALHOS DO TECLADO NOVO
     if texto_recebido in ["👑 Painel Master", "💼 Painel Revenda"]:
         await menu_comando(update, context)
         return
@@ -1622,7 +1611,6 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
         await reportar_erro_callback(update, context)
         return
 
-    # 2. RECEBIMENTO DE PRINT OU RELATO DE ERRO
     if context.user_data.get("aguardando_reporte"):
         context.user_data["aguardando_reporte"] = False
         legenda_ou_texto = update.message.caption or update.message.text or "Sem descrição."
@@ -1653,7 +1641,6 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text("✅ <b>Seu relato/print foi enviado com sucesso ao suporte!</b>", parse_mode="HTML")
         return
 
-    # 3. VERIFICAÇÃO DE AUTORIZAÇÃO E BUSCA IMAP (ORIGINAL DO PDF)
     email_original = texto_recebido.lower()
     bot_dono_id = context.bot_data.get("dono_id")
 
@@ -1750,7 +1737,7 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
         logging.error(f"Erro ao editar mensagem: {e}")
 
 # ==========================================
-# INICIALIZAÇÃO E MULTI-BOT (ACRESCENTADO)
+# INICIALIZAÇÃO E MULTI-BOT
 # ==========================================
 def construir_aplicacao_bot(token: str, dono_id: str = None):
     app = ApplicationBuilder().token(token).build()
