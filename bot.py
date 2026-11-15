@@ -139,6 +139,43 @@ def run_flask():
 # ==========================================
 # BANCO DE DADOS E PERSISTÊNCIA
 # ==========================================
+def verificar_compra_bot_vendas(user_id: str, email_digitado: str):
+    """
+    Consulta a tabela acessos_codigos_liberados (schema bot_vendas) para verificar
+    se o cliente comprou este e-mail no Bot de Vendas e se ainda está válido.
+    Retorna: 'valido', 'expirado' ou None
+    """
+    if not supabase:
+        return None
+    try:
+        res = (
+            supabase.schema("bot_vendas")
+            .table("acessos_codigos_liberados")
+            .select("*")
+            .eq("telegram_chat_id", str(user_id).strip())
+            .eq("email_acesso", str(email_digitado).strip().lower())
+            .eq("ativo", True)
+            .execute()
+        )
+        if not res.data:
+            return None
+
+        hoje = datetime.now().date()
+        encontrou_expirado = False
+
+        for item in res.data:
+            exp_date = converter_para_date(item.get("data_vencimento"))
+            if not exp_date or exp_date >= hoje:
+                return "valido"
+            else:
+                encontrou_expirado = True
+
+        if encontrou_expirado:
+            return "expirado"
+    except Exception as e:
+        logging.error(f"Erro ao verificar acesso no schema bot_vendas: {e}")
+    return None
+
 def carregar_clientes_db() -> dict:
     dados = {}
     if supabase:
@@ -452,7 +489,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
 
             # 2. NETFLIX: TRATAMENTO COMPLETO E FLEXÍVEL
             if eh_netflix:
-                # PASSO 1: VERIFICAR SE EXISTE UM BOTÃO/LINK DE AÇÃO NO E-MAIL (Residência, Viagem, Receber Código, Redefinição)
                 link_acao, tipo_acao = extrair_link_acao_netflix(corpo_html)
 
                 if link_acao:
@@ -489,7 +525,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                             f"⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
                         )
 
-                # PASSO 2: SE NÃO HOUVER BOTÃO DE AÇÃO, PROCURAR CÓDIGO NUMÉRICO IMPRESSO NO TEXTO
                 texto_limpo = re.sub(r'\b\d{1,2}:\d{2}(?::\d{2})?\b', '', corpo_texto_puro)
                 texto_limpo = re.sub(r'\b\d{1,2}\s+de\s+[a-zç]+\b', '', texto_limpo, flags=re.IGNORECASE)
 
@@ -501,7 +536,6 @@ def extrair_codigo_imap_wrapper(dados_conta: dict, pode_acessar_sensivel: bool =
                     mail.logout()
                     return f"✅ <b>Código de Acesso Netflix Encontrado!</b>\n\n🔑 Seu código é: <code>{codigo_valido}</code>\n\n⏱️ <i>E-mail recebido há {minutos} minuto(s).</i>"
 
-                # PASSO 3: FALLBACK DE LINK GENÉRICO
                 link_fallback = extrair_url_pura_href(corpo_html, "netflix.com")
                 if link_fallback and not any(x in link_fallback for x in ["unsubscribe", "help", "privacy", "terms"]):
                     mail.close()
@@ -857,46 +891,50 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
     user_id = str(update.effective_user.id).strip()
     email_original = update.message.text.strip().lower()
 
-    clientes = carregar_json("clientes.json")
-    eh_admin = (user_id == str(ADMIN_ID).strip())
-    dados_cliente = clientes.get(user_id, {})
-
-    if not eh_admin and (not dados_cliente or not dados_cliente.get("emails_permitidos")) and not dados_cliente.get("permitir_sensivel"):
-        await update.message.reply_text(
-            f"🔒 <b>Acesso Não Liberado!</b>\n\nSeu ID de Usuário: <code>{user_id}</code>\n\nEncaminhe ao Suporte para liberação.",
-            parse_mode="HTML"
-        )
-        return
-
     if not re.match(r"^[\w\.\+-]+@[\w\.-]+\.\w+$", email_original):
         await update.message.reply_text("⚠️ Por favor, digite um <b>endereço de e-mail válido</b>.", parse_mode="HTML")
         return
 
+    clientes = carregar_json("clientes.json")
+    eh_admin = (user_id == str(ADMIN_ID).strip())
+    dados_cliente = clientes.get(user_id, {})
+
     pode_acessar_sensivel = eh_admin or dados_cliente.get("permitir_sensivel", False)
 
     if not eh_admin:
-        emails_permitidos = dados_cliente.get("emails_permitidos", {})
-        hoje = datetime.now().date()
+        # 1. Verifica primeiro se o cliente comprou este acesso no Bot de Vendas (schema bot_vendas)
+        status_loja = verificar_compra_bot_vendas(user_id, email_original)
 
-        tem_acesso = False
-        email_expirado = False
+        tem_acesso = (status_loja == "valido")
+        email_expirado = (status_loja == "expirado")
 
-        if dados_cliente.get("permitir_sensivel", False):
-            tem_acesso = True
-        else:
-            for k, data_exp in emails_permitidos.items():
-                if k == "*" or email_original == k.lower():
-                    exp_date = converter_para_date(data_exp)
-                    if exp_date and exp_date >= hoje:
-                        tem_acesso = True
-                        break
-                    else:
-                        email_expirado = True
+        # 2. Se não encontrou na loja, verifica na lista manual/VIP tradicional do bot de códigos
+        if not tem_acesso:
+            emails_permitidos = dados_cliente.get("emails_permitidos", {})
+            hoje = datetime.now().date()
+
+            if dados_cliente.get("permitir_sensivel", False):
+                tem_acesso = True
+            else:
+                for k, data_exp in emails_permitidos.items():
+                    if k == "*" or email_original == k.lower():
+                        exp_date = converter_para_date(data_exp)
+                        if exp_date and exp_date >= hoje:
+                            tem_acesso = True
+                            email_expirado = False
+                            break
+                        else:
+                            email_expirado = True
 
         if not tem_acesso:
             if email_expirado:
                 await update.message.reply_text(
-                    f"🛑 <b>Acesso Expirado!</b>\n\nA autorização para o e-mail <code>{email_original}</code> já venceu. Entre em contato com o suporte para renovar.",
+                    f"🛑 <b>Acesso Expirado!</b>\n\nA autorização para o e-mail <code>{email_original}</code> já venceu. Entre em contato com o suporte ou renove na loja.",
+                    parse_mode="HTML"
+                )
+            elif not dados_cliente or (not dados_cliente.get("emails_permitidos") and not dados_cliente.get("permitir_sensivel")):
+                await update.message.reply_text(
+                    f"🔒 <b>Acesso Não Liberado!</b>\n\nSeu ID de Usuário: <code>{user_id}</code>\n\nCompre um acesso na loja ou encaminhe seu ID ao Suporte para liberação.",
                     parse_mode="HTML"
                 )
             else:
