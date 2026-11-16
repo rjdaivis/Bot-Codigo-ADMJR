@@ -104,7 +104,6 @@ def extrair_anchors_html(corpo_html: str):
 # FUNÇÕES AUXILIARES DE TRATAMENTO DE DATAS E TEXTO
 # ==========================================
 def converter_para_date(data_str: str):
-    """Converte qualquer string de data (ISO, YYYY-MM-DD, DD-MM-YYYY) para um objeto date."""
     if not data_str:
         return None
     data_limpa = str(data_str).split("T")[0].strip()
@@ -117,11 +116,23 @@ def converter_para_date(data_str: str):
     return None
 
 def formatar_data_exibicao_br(data_str: str) -> str:
-    """Converte a data para o formato visual DD-MM-AAAA."""
     dt_obj = converter_para_date(data_str)
     if dt_obj:
         return dt_obj.strftime("%d-%m-%Y")
     return str(data_str)
+
+def normalizar_email_gmail(email_str: str) -> str:
+    if not email_str:
+        return ""
+    partes = email_str.strip().lower().split('@')
+    if len(partes) != 2:
+        return email_str.strip().lower()
+    usuario, dominio = partes
+    if dominio in ["gmail.com", "googlemail.com"]:
+        usuario = usuario.split('+')[0]
+        usuario = usuario.replace(".", "")
+        return f"{usuario}@{dominio}"
+    return email_str.strip().lower()
 
 # ==========================================
 # SERVIDOR FLASK (HEALTH CHECK DO RENDER)
@@ -141,39 +152,46 @@ def run_flask():
 # ==========================================
 def verificar_compra_bot_vendas(user_id: str, email_digitado: str):
     """
-    Consulta a tabela acessos_codigos_liberados (schema bot_vendas) para verificar
+    Consulta acessos_codigos_liberados (schema bot_vendas) para verificar
     se o cliente comprou este e-mail no Bot de Vendas e se ainda está válido.
     Retorna: 'valido', 'expirado' ou None
     """
     if not supabase:
         return None
+
+    uid = str(user_id).strip()
+    email_limpo = str(email_digitado).strip().lower()
+    email_norm = normalizar_email_gmail(email_limpo)
+
     try:
         res = (
             supabase.schema("bot_vendas")
             .table("acessos_codigos_liberados")
             .select("*")
-            .eq("telegram_chat_id", str(user_id).strip())
-            .eq("email_acesso", str(email_digitado).strip().lower())
+            .eq("telegram_chat_id", uid)
             .eq("ativo", True)
             .execute()
         )
-        if not res.data:
-            return None
+        registros = res.data or []
+        logging.info(f"🔎 Consulta bot_vendas para ID {uid}: {len(registros)} registro(s) ativo(s).")
 
         hoje = datetime.now().date()
         encontrou_expirado = False
 
-        for item in res.data:
-            exp_date = converter_para_date(item.get("data_vencimento"))
-            if not exp_date or exp_date >= hoje:
-                return "valido"
-            else:
-                encontrou_expirado = True
+        for item in registros:
+            email_banco = str(item.get("email_acesso") or "").strip().lower()
+            if email_banco == email_limpo or normalizar_email_gmail(email_banco) == email_norm:
+                exp_date = converter_para_date(item.get("data_vencimento"))
+                if not exp_date or exp_date >= hoje:
+                    return "valido"
+                else:
+                    encontrou_expirado = True
 
         if encontrou_expirado:
             return "expirado"
     except Exception as e:
-        logging.error(f"Erro ao verificar acesso no schema bot_vendas: {e}")
+        logging.error(f"❌ Erro ao verificar acesso no schema bot_vendas: {e}")
+
     return None
 
 def carregar_clientes_db() -> dict:
@@ -260,19 +278,6 @@ def salvar_json(caminho: str, dados: dict):
 # ==========================================
 # MOTOR DE TRATAMENTO E EXTRAÇÃO IMAP
 # ==========================================
-def normalizar_email_gmail(email_str: str) -> str:
-    if not email_str:
-        return ""
-    partes = email_str.strip().lower().split('@')
-    if len(partes) != 2:
-        return email_str.strip().lower()
-    usuario, dominio = partes
-    if dominio in ["gmail.com", "googlemail.com"]:
-        usuario = usuario.split('+')[0]
-        usuario = usuario.replace(".", "")
-        return f"{usuario}@{dominio}"
-    return email_str.strip().lower()
-
 def decodificar_assunto(assunto_raw: str) -> str:
     if not assunto_raw:
         return ""
@@ -314,17 +319,12 @@ def limpar_url_link(link: str) -> str:
     return link_limpo.strip()
 
 def extrair_link_acao_netflix(corpo_html: str):
-    """
-    Procura links de botões de ação na Netflix (Residência, Viagem, Receber Código, Redefinição).
-    Retorna (link, tipo) ou (None, None).
-    """
     if not corpo_html:
         return None, None
 
     bloqueadas = ["unsubscribe", "help.netflix.com", "privacy", "terms", "facebook", "twitter", "instagram"]
     anchors = extrair_anchors_html(corpo_html)
 
-    # 1. Pelo texto do BOTÃO (Anchor text)
     for href, text in anchors:
         l_limpo = limpar_url_link(href)
         l_lower = l_limpo.lower()
@@ -337,7 +337,6 @@ def extrair_link_acao_netflix(corpo_html: str):
             if any(p in txt_lower for p in ["redefinir senha", "redefinir sua senha", "alterar senha", "reset password"]):
                 return l_limpo, "redefinicao"
 
-    # 2. Pela estrutura da URL
     for href, text in anchors:
         l_limpo = limpar_url_link(href)
         l_lower = l_limpo.lower()
@@ -720,7 +719,6 @@ async def autorizar_cliente(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 async def vip_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando /vip <telegram_id> sim/nao para liberar busca ilimitada de e-mails."""
     if str(update.effective_user.id).strip() != str(ADMIN_ID).strip():
         return
 
@@ -747,7 +745,6 @@ async def vip_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def editar_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando /editar <telegram_id> <email> <nova_data_DD-MM-AAAA ou sem_data>."""
     if str(update.effective_user.id).strip() != str(ADMIN_ID).strip():
         return
 
@@ -786,7 +783,6 @@ async def editar_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def remover_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando /remover <telegram_id> <email>."""
     if str(update.effective_user.id).strip() != str(ADMIN_ID).strip():
         return
 
@@ -902,13 +898,11 @@ async def receber_mensagem_email(update: Update, context: ContextTypes.DEFAULT_T
     pode_acessar_sensivel = eh_admin or dados_cliente.get("permitir_sensivel", False)
 
     if not eh_admin:
-        # 1. Verifica primeiro se o cliente comprou este acesso no Bot de Vendas (schema bot_vendas)
         status_loja = verificar_compra_bot_vendas(user_id, email_original)
 
         tem_acesso = (status_loja == "valido")
         email_expirado = (status_loja == "expirado")
 
-        # 2. Se não encontrou na loja, verifica na lista manual/VIP tradicional do bot de códigos
         if not tem_acesso:
             emails_permitidos = dados_cliente.get("emails_permitidos", {})
             hoje = datetime.now().date()
@@ -1006,7 +1000,7 @@ def main():
             
             app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receber_mensagem_email))
 
-            print("🤖 Bot iniciado e rodando no Render com prioridade para links de botões da Netflix...")
+            print("🤖 Bot iniciado e rodando no Render...")
             app.run_polling(poll_interval=1.0, timeout=20)
         except Exception as e:
             logging.error(f"Ocorreu uma queda temporária no Bot: {e}. Reconectando em 5 segundos...")
