@@ -148,13 +148,12 @@ def run_flask():
     app_flask.run(host='0.0.0.0', port=port)
 
 # ==========================================
-# BANCO DE DADOS E PERSISTÊNCIA
+# BANCO DE DADOS E PERSISTÊNCIA (SCHEMA BOT_VENDAS)
 # ==========================================
 def verificar_compra_bot_vendas(user_id: str, email_digitado: str):
     """
-    Consulta acessos_codigos_liberados (schema bot_vendas) para verificar
-    se o cliente comprou este e-mail no Bot de Vendas e se ainda está válido.
-    Retorna: 'valido', 'expirado' ou None
+    Consulta o schema 'bot_vendas' para verificar se o cliente
+    comprou este e-mail no Bot de Vendas e se ainda está válido.
     """
     if not supabase:
         return None
@@ -164,6 +163,7 @@ def verificar_compra_bot_vendas(user_id: str, email_digitado: str):
     email_norm = normalizar_email_gmail(email_limpo)
 
     try:
+        # Acessa explicitamente o schema bot_vendas onde ficam as assinaturas
         res = (
             supabase.schema("bot_vendas")
             .table("acessos_codigos_liberados")
@@ -173,7 +173,7 @@ def verificar_compra_bot_vendas(user_id: str, email_digitado: str):
             .execute()
         )
         registros = res.data or []
-        logging.info(f"🔎 Consulta bot_vendas para ID {uid}: {len(registros)} registro(s) ativo(s).")
+        logging.info(f"🔎 Consulta schema bot_vendas para ID {uid}: {len(registros)} registro(s) ativo(s).")
 
         hoje = datetime.now().date()
         encontrou_expirado = False
@@ -190,7 +190,7 @@ def verificar_compra_bot_vendas(user_id: str, email_digitado: str):
         if encontrou_expirado:
             return "expirado"
     except Exception as e:
-        logging.error(f"❌ Erro ao verificar acesso no schema bot_vendas: {e}")
+        logging.error(f"❌ Erro ao consultar schema bot_vendas: {e}")
 
     return None
 
@@ -198,6 +198,7 @@ def carregar_clientes_db() -> dict:
     dados = {}
     if supabase:
         try:
+            # Caso utilize schema específico para clientes bot, ajuste aqui se necessário, ou usa o padrão
             res = supabase.table("clientes_bot").select("*").execute()
             if res.data:
                 for row in res.data:
